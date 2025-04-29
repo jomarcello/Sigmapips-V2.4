@@ -449,14 +449,11 @@ class ChartService:
         screenshot_bytes = None
         
         try:
-            logger.info(f"******** CAPTURE TRADINGVIEW SCREENSHOT AANGEROEPEN voor {instrument} van {url} ********")
-            logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
+            logger.info(f"Capturing TradingView screenshot for {instrument}")
             
             # ENSURE URL CONTAINS SESSION ID
             import os
             session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-            # Verwijder alle waarschuwingen over "default" session ID - het is een geldige ID
-            logger.info(f"✓ Using TradingView session ID: {session_id[:5]}...")
             
             # Parse URL components
             url_parts = url.split('?')
@@ -474,11 +471,9 @@ class ChartService:
             # Add essential parameters if missing
             if 'session' not in params:
                 params['session'] = session_id
-                logger.info(f"📝 Added session ID to URL params")
             
             # Force reload parameter om cache te omzeilen
             params['force_reload'] = 'true'
-            logger.info(f"📝 Added force_reload=true to URL params")
             
             # Add theme parameter for consistency
             params['theme'] = 'dark'
@@ -487,53 +482,42 @@ class ChartService:
             query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
             url = f"{base_url}?{query_string}"
             
-            logger.info(f"📝 Final URL with all parameters: {url}")
+            logger.info(f"Using URL: {base_url}?{query_string[:30]}...")
             
-            # EXTRA DEBUG: Check if we can import playwright
+            # Import playwright
             try:
                 import playwright
-                logger.info(f"✅ Playwright module imported successfully, version: {getattr(playwright, '__version__', 'unknown')}")
                 from playwright.async_api import async_playwright
-                logger.info("✅ Playwright async_api successfully imported")
             except ImportError as import_e:
-                logger.error(f"Failed to import playwright: {str(import_e)}. Screenshot will fail.")
-                logger.error(f"Exception details: {traceback.format_exc()}")
+                logger.error(f"Failed to import playwright: {str(import_e)}.")
                 return None
             except Exception as other_e:
-                logger.error(f"Unknown error during playwright import: {str(other_e)}")
-                logger.error(f"Exception details: {traceback.format_exc()}")
+                logger.error(f"Error with playwright: {str(other_e)}")
                 return None
                 
-            # Launch playwright
-            logger.info(f"🚀 Launching async_playwright for {instrument}...") # ADDED LOG
+            # Launch playwright - optimized for speed
             async with async_playwright() as p:
-                logger.info(f"✅ Async_playwright launched for {instrument}") # ADDED LOG
                 try:
-                    # Launch browser with specific options
-                    logger.info(f"🖥️ Launching browser for {instrument}...") # ADDED LOG
-                    browser = await p.chromium.launch(headless=True)
-                    logger.info(f"✅ Browser launched successfully for {instrument}") # ADDED LOG
+                    # Launch browser with minimal options for speed
+                    browser = await p.chromium.launch(
+                        headless=True, 
+                        args=['--disable-extensions', '--disable-dev-shm-usage']
+                    )
                 except Exception as browser_e:
-                    logger.error(f"❌ Failed to launch browser for {instrument}: {str(browser_e)}")
-                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    logger.error(f"Failed to launch browser: {str(browser_e)}")
                     return None
 
                 try:
-                    # Create a new page with larger viewport
-                    logger.info(f"📄 Creating browser context for {instrument}...") # ADDED LOG
+                    # Create browser context with optimized settings
                     context = await browser.new_context(
-                        viewport={"width": 1920, "height": 1080}
+                        viewport={"width": 1920, "height": 1080},
+                        device_scale_factor=1,  # Optimized for speed
+                        java_script_enabled=True,
+                        is_mobile=False
                     )
-                    logger.info(f"✅ Browser context created for {instrument}") # ADDED LOG
                     
-                    # UITGEBREIDE SESSIE COOKIE CONFIGURATIE
-                    import os
-                    session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-                    logger.info(f"Session ID cookie length: {len(session_id)} characters")
-                    
-                    # Add multiple cookie formats to ensure compatibility
-                    logger.info(f"🍪 Adding cookies for {instrument}...") # ADDED LOG
-                    await context.add_cookies([
+                    # Add cookies efficiently
+                    cookies = [
                         # Traditional sessionid cookie
                         {
                             "name": "sessionid",
@@ -547,14 +531,6 @@ class ChartService:
                         # Alternative sid cookie
                         {
                             "name": "tv_session",
-                            "value": session_id,
-                            "domain": ".tradingview.com",
-                            "path": "/",
-                            "secure": True
-                        },
-                        # Another possible format
-                        {
-                            "name": "session",
                             "value": session_id,
                             "domain": ".tradingview.com",
                             "path": "/",
@@ -574,94 +550,65 @@ class ChartService:
                             "domain": ".tradingview.com", 
                             "path": "/"
                         }
-                    ])
-                    logger.info(f"✅ Cookies added for {instrument}") # ADDED LOG
+                    ]
+                    await context.add_cookies(cookies)
                     
-                    logger.info(f"📄 Creating new page for {instrument}...") # ADDED LOG
+                    # Create page
                     page = await context.new_page()
-                    logger.info(f"✅ New page created for {instrument}") # ADDED LOG
                 except Exception as page_e:
-                    logger.error(f"❌ Failed to create page/context or add cookies for {instrument}: {str(page_e)}") # UPDATED LOG
+                    logger.error(f"Failed to setup browser context: {str(page_e)}")
                     await browser.close()
                     return None
 
                 try:
-                    # Increase navigation timeout and go with load instead of networkidle
-                    logger.info(f"➡️ Navigating to URL for {instrument}: {url}") # ADDED LOG
-                    await page.goto(url, timeout=60000, wait_until='load')
-                    logger.info(f"✅ Page loaded (load event) for {instrument}: {url}") # ADDED LOG
+                    # Optimized navigation - go with domcontentloaded for speed
+                    await page.goto(url, timeout=45000, wait_until='domcontentloaded')
                     
-                    # Auto-dismiss dialogs
+                    # Auto-dismiss dialogs with optimized JS
                     await page.evaluate("""() => {
-                        // Escape key to close all dialogs
-                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
-                        
-                        // Close all dialog buttons
+                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
                         document.querySelectorAll('button.close-B02UUUN3, button[data-name="close"]').forEach(btn => {
                             try { btn.click(); } catch(e) {}
                         });
                     }""")
                     
-                    # Wacht EXPLICIET op de chart elementen
-                    logger.info(f"⏳ Waiting for chart elements for {instrument}...") # ADDED LOG
+                    # Wacht op chart elementen - met gereduceerde timeouts
                     try:
-                        # Wacht tot de chart container aanwezig is
-                        logger.info(f"⏳ Waiting for .chart-container selector...") # ADDED LOG
-                        await page.wait_for_selector('.chart-container', timeout=20000)
-                        logger.info(f"✅ Chart container found on page")
-                        
-                        # Wacht tot de prijs-labels zichtbaar zijn (indicatie dat chart echt is geladen)
-                        logger.info(f"⏳ Waiting for .price-axis selector...") # ADDED LOG
-                        await page.wait_for_selector('.price-axis', timeout=10000)
-                        logger.info(f"✅ Price axis labels found - chart rendering potentially complete") # UPDATED LOG
-                        
+                        logger.info(f"Waiting for chart elements...")
+                        await page.wait_for_selector('.chart-container', timeout=15000)
+                        await page.wait_for_selector('.price-axis', timeout=7000)
                     except Exception as wait_e:
-                        logger.warning(f"⚠️ Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
+                        logger.warning(f"Wait error: {str(wait_e)}, continuing anyway")
                     
-                    # CRUCIAAL: Extra wachttijd voor het laden van de indicatoren
-                    logger.info(f"⏳ Waiting extra time for indicators to load (5000ms)...")
-                    await page.wait_for_timeout(5000)
+                    # Gereduceerde wachttijd voor indicatoren
+                    await page.wait_for_timeout(3000)
                     
-                    # Simulate Shift+F for fullscreen mode
-                    logger.info(f"⌨️ Simulating Shift+F for fullscreen...") # ADDED LOG
+                    # Simulate fullscreen
                     await page.keyboard.press("Shift+F")
-                    logger.info(f"✅ Shift+F simulated") # ADDED LOG
-                    
-                    # Extra timeout na fullscreen voor UI aanpassing
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(500)  # Gereduceerd
                                         
                     # Take screenshot
-                    logger.info(f"📸 Taking full page screenshot for {instrument}...") # ADDED LOG
-                    screenshot_bytes = await page.screenshot(full_page=True, type='jpeg', quality=90)
-                    screenshot_size_kb = len(screenshot_bytes) / 1024 if screenshot_bytes else 0
-                    logger.info(f"✅ Screenshot captured for {instrument} (Size: {screenshot_size_kb:.2f} KB)") # ADDED LOG & SIZE
+                    screenshot_bytes = await page.screenshot(full_page=True, type='jpeg', quality=85)  # Verminderde kwaliteit voor snelheid
                     
-                    # Close the browser explicitly
-                    logger.info(f"🔒 Closing browser for {instrument}...") # ADDED LOG
+                    # Close the browser immediately
                     await browser.close()
-                    logger.info(f"✅ Browser closed successfully for {instrument}") # ADDED LOG
                     
                 except Exception as navigation_e:
-                    logger.error(f"❌ Failed during navigation/wait/screenshot for {instrument}: {str(navigation_e)}") # UPDATED LOG
-                    logger.error(f"Exception details: {traceback.format_exc()}")
-                    await browser.close() # Ensure browser is closed on error
+                    logger.error(f"Error during screenshot: {str(navigation_e)}")
+                    await browser.close() 
                     return None
         except Exception as e:
-            # Capture and log the full traceback for any errors
-            logger.error(f"Error capturing TradingView screenshot for {instrument}: {str(e)}")
-            logger.error(f"Exception details: {traceback.format_exc()}")
+            logger.error(f"Screenshot error: {str(e)}")
             return None
         
-        # Controleer of de screenshot wel daadwerkelijk een afbeelding is
-        # LOG ADDED: Log size before final check
+        # Check screenshot validity
         final_screenshot_size_kb = len(screenshot_bytes) / 1024 if screenshot_bytes else 0
-        logger.info(f"ℹ️ Final check of screenshot size: {final_screenshot_size_kb:.2f} KB (Threshold: > 1 KB)")
-        if screenshot_bytes and len(screenshot_bytes) > 1000: # Threshold is 1000 bytes (~1KB)
+        if screenshot_bytes and len(screenshot_bytes) > 1000:
             end_time = time.time()
-            logger.info(f"✅ Screenshot capture completed successfully in {end_time - start_time:.2f} seconds.") # UPDATED LOG
+            logger.info(f"Screenshot completed in {end_time - start_time:.2f} seconds ({final_screenshot_size_kb:.2f} KB)")
             return screenshot_bytes
         else:
-            logger.error(f"❌ Screenshot capture failed final check: {'Empty bytes' if not screenshot_bytes else f'Size {final_screenshot_size_kb:.2f} KB too small'}")
+            logger.error(f"Screenshot failed: {'Empty or too small'}")
             return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
@@ -2069,73 +2016,50 @@ class ChartService:
             return None
 
     def get_tradingview_url(self, instrument: str, timeframe: str = '1h') -> str:
-        """Get the TradingView chart URL for a specific instrument."""
-        session_id = None # Initialize session_id
+        """Get a TradingView chart URL for a specific instrument"""
         try:
-            # Get environment session ID for authentication - standardized default
-            session_id = os.getenv('TRADINGVIEW_SESSION_ID', 'z90l85p2anlgdwfppsrdnnfantz48z1o')
-            # Check if session ID is properly set
-            if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
-                logger.warning(f"⚠️ Using DEFAULT session ID - environment variable not set properly!")
-            else:
-                logger.info(f"✓ Using custom session ID from environment: {session_id[:5]}...")
-                
-            # Log session ID length as an integrity check
+            # Session ID for TradingView
+            session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
+            # Verwijder deze waarschuwing, we weten dat het een geldige ID is
             logger.info(f"Session ID length: {len(session_id)} characters")
             
+            # Find predefined chart URL if available
+            instrument_upper = instrument.upper()
+            
             # Main chart URL for EURUSD (full featured)
-            if instrument == 'EURUSD':
-                # Ensure clean URL construction with proper encoding
+            if instrument_upper == 'EURUSD':
                 base_url = "https://www.tradingview.com/chart/xknpxpcr/"
                 params = {
                     'timeframe': timeframe,
                     'session': session_id
                 }
-                # Construct URL with properly encoded parameters
                 param_string = "&".join([f"{k}={v}" for k, v in params.items()])
                 url = f"{base_url}?{param_string}" 
                 logger.info(f"Built TradingView URL for {instrument}: {url}")
                 return url
-                
-            # Use layout ID from config for other instruments
-            # Check if self.config exists and has the key
-            layout_id = 'xknpxpcr' # Default layout ID
-            if hasattr(self, 'config') and isinstance(self.config, dict):
-                layout_id = self.config.get('tradingview_layout_id', 'xknpxpcr')
-                logger.info(f"Using layout ID from config: {layout_id}")
-            else:
-                logger.warning("self.config not found or not a dict, using default layout ID 'xknpxpcr'")
             
-            # Format the symbol based on the instrument type
-            symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
+            # Use layout ID for other instruments
+            layout_id = 'xknpxpcr'
             
-            # Construct the URL with session ID for better authentication - using proper parameter formatting
+            # Format symbol correctly based on type
+            symbol = f"FX:{instrument_upper}" if len(instrument_upper) == 6 and all(c.isalpha() for c in instrument_upper) else instrument_upper
+            
+            # Build URL
             base_url = f"https://www.tradingview.com/chart/{layout_id}/"
             params = {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'session': session_id
             }
-            # Construct URL with properly encoded parameters
             param_string = "&".join([f"{k}={v}" for k, v in params.items()])
             url = f"{base_url}?{param_string}"
             
-            logger.info(f"Built TradingView URL for {instrument} with session ID: {url}")
             return url
+            
         except Exception as e:
-            logger.error(f"Error getting TradingView URL for {instrument}: {str(e)}")
-            logger.error(traceback.format_exc()) # Log full traceback
-            # Fallback URL - still try to add session if available with manual formatting
-            fallback_url = f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
-            if session_id:
-                # Ensure no duplicate parameters by using a clean approach
-                if '?' in fallback_url:
-                    fallback_url += f"&session={session_id}"
-                else:
-                    fallback_url += f"?session={session_id}"
-                logger.warning(f"Using fallback URL with session ID: {fallback_url}")
-            else:
-                logger.warning(f"Using fallback URL *without* session ID: {fallback_url}")
+            logger.error(f"Error getting TradingView URL: {str(e)}")
+            # Fallback URL
+            fallback_url = f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}&session={session_id}"
             return fallback_url
 
     def _normalize_instrument_name(self, instrument: str) -> str:
