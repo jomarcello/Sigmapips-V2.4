@@ -640,65 +640,41 @@ class ChartService:
                 
                 # Detect market type to determine which provider to use first
                 market_type = await self._detect_market_type(instrument)
-                yahoo_provider = None
-                binance_provider = None
+                logger.info(f"Detected market type: {market_type} for {instrument}")
                 
-                # Find our providers
-                for provider in self.chart_providers:
-                    if 'yahoo' in provider.__class__.__name__.lower():
-                        yahoo_provider = provider
-                    elif 'binance' in provider.__class__.__name__.lower():
-                        binance_provider = provider
+                # Haal instanties van providers op
+                yahoo_provider = next((p for p in self.chart_providers if isinstance(p, YahooFinanceProvider)), None)
+                binance_provider = next((p for p in self.chart_providers if isinstance(p, BinanceProvider)), None)
                 
-                # Choose providers based on market type
-                prioritized_providers = []
+                # Stel de volgorde van providers in
+                providers_to_try = []
                 if market_type == "crypto":
-                    # For crypto, try Binance first, then Yahoo
-                    if binance_provider:
-                        prioritized_providers.append(binance_provider)
-                    if yahoo_provider:
-                        prioritized_providers.append(yahoo_provider)
+                    logger.info("Prioritizing Binance for crypto")
+                    if binance_provider: providers_to_try.append(binance_provider)
+                    if yahoo_provider: providers_to_try.append(yahoo_provider)
                 elif market_type == "commodity":
-                    # For commodities, get price from our specialized method if Yahoo fails
-                    if yahoo_provider:
-                        prioritized_providers.append(yahoo_provider)
-                    # We'll handle the fallback specially for commodities
-                else:
-                    # For non-crypto (forex, indices), only use Yahoo
-                    if yahoo_provider:
-                        prioritized_providers.append(yahoo_provider)
-                    # Don't add Binance for non-crypto markets
+                    logger.info("Prioritizing Yahoo for commodities")
+                    if yahoo_provider: providers_to_try.append(yahoo_provider)
+                    # Geen Binance voor commodities
+                else: # forex, index
+                    logger.info("Prioritizing Yahoo for forex/indices")
+                    if yahoo_provider: providers_to_try.append(yahoo_provider)
+                    # Geen Binance voor forex/indices
+
+                # Log de uiteindelijke volgorde
+                provider_names = [p.__class__.__name__ for p in providers_to_try]
+                logger.info(f"Final provider order for {instrument}: {provider_names}")
                 
-                # Add any other providers that aren't Binance (for non-crypto markets)
-                for provider in self.chart_providers:
-                    if provider not in prioritized_providers and (market_type == "crypto" or not isinstance(provider, BinanceProvider)):
-                        prioritized_providers.append(provider)
-                
-                # Try the prioritized providers
+                # Try the providers in the determined order
                 successful_provider = None
-                for provider in prioritized_providers:
+                market_data = None
+                for provider in providers_to_try:
                     try:
-                        logger.info(f"Trying {provider.__class__.__name__} for {instrument} ({market_type})")
-                        if 'yahoo' in provider.__class__.__name__.lower():
-                            logger.info(f"Using Yahoo Finance provider for {instrument}, timeframe: {timeframe}")
-                            # Extra diagnostics for Yahoo provider
-                            formatted_symbol = None
-                            if hasattr(provider, '_format_symbol'):
-                                try:
-                                    # Let the provider format the symbol internally
-                                    logger.info(f"Provider will format symbol internally for: {instrument}")
-                                    market_data = await provider.get_market_data(instrument, timeframe)
-                                except Exception as format_e:
-                                    logger.error(f"Error during market data fetch (symbol formatting might be internal): {str(format_e)}")
-                                    market_data = await provider.get_market_data(instrument, timeframe) # Fallback to original instrument
-                            else:
-                                logger.warning("Yahoo provider missing _format_symbol method, calling with original instrument")
-                                market_data = await provider.get_market_data(instrument, timeframe)
-                        else:
-                            # For other providers (e.g., Binance), call normally
-                            market_data = await provider.get_market_data(instrument, timeframe)
+                        logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
+                        # Gebruik de get_market_data methode van de provider
+                        market_data = await provider.get_market_data(instrument, timeframe)
                         
-                        # More detailed logging about the result
+                        # Controleer het resultaat
                         if market_data is None:
                             logger.warning(f"Provider {provider.__class__.__name__} returned None for {instrument}")
                             continue
@@ -708,7 +684,8 @@ class ChartService:
                         elif isinstance(market_data, pd.DataFrame):
                             logger.info(f"Provider {provider.__class__.__name__} returned DataFrame with shape {market_data.shape} for {instrument}")
                             successful_provider = provider
-                            break
+                            analysis_data = {} # Reset analysis_data for commodity handling below
+                            break # Stop zodra we succesvolle data hebben
                             
                     except Exception as e:
                         # Check for Binance geo-restriction error and handle gracefully
