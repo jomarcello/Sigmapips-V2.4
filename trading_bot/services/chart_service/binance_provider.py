@@ -32,7 +32,7 @@ class BinanceProvider:
     # Data API endpoint for market data only
     DATA_API_ENDPOINT = "https://data-api.binance.vision"
     # Specific endpoint for SPOT Klines (less restricted)
-    SPOT_DATA_API_URL = "https://data.binance.com" 
+    SPOT_DATA_API_URL = "https://data.binance.com
     
     # Current active endpoint (start with the primary one)
     _active_endpoint_index = 0
