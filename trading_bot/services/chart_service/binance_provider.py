@@ -72,6 +72,9 @@ class BinanceProvider:
         retries = 0
         max_retries = 3
         
+        # Log original instrument before formatting
+        logger.info(f"[Binance] Getting market data for instrument: {instrument}")
+        
         while retries < max_retries:
             try:
                 # Implement basic rate limiting
@@ -92,6 +95,7 @@ class BinanceProvider:
                 
                 # Format symbol for Binance API
                 formatted_symbol = BinanceProvider._format_symbol(instrument)
+                logger.info(f"[Binance] Formatted symbol: {instrument} -> {formatted_symbol}")
                 
                 base_url = BinanceProvider.get_base_url()
                 logger.info(f"Fetching {formatted_symbol} data from Binance using {base_url}. API call #{BinanceProvider._api_call_count} this minute.")
@@ -139,12 +143,15 @@ class BinanceProvider:
                                 BinanceProvider.switch_endpoint()
                                 retries += 1
                                 continue
+                            logger.error(f"[Binance] All endpoints failed for {formatted_symbol}. Giving up after {retries+1} attempts.")
                             return None
                         
                         klines = await response.json()
                         if not klines or not isinstance(klines, list):
                             logger.error(f"Binance API returned invalid kline data: {klines}")
                             return None
+                        
+                        logger.info(f"[Binance] Successfully retrieved {len(klines)} klines for {formatted_symbol}")
                 
                 # Convert klines to dataframe
                 df = BinanceProvider._klines_to_dataframe(klines)
@@ -196,12 +203,24 @@ class BinanceProvider:
                 logger.error(f"Error getting market data from Binance: {str(e)}")
                 logger.error(traceback.format_exc())
                 
+                # Provide more detailed error information
+                error_type = type(e).__name__
+                logger.error(f"[Binance] Error type: {error_type} for {instrument} (formatted as {formatted_symbol if 'formatted_symbol' in locals() else 'unknown'})")
+                
+                # Common error diagnostics for crypto API issues
+                if "symbol" in str(e).lower():
+                    logger.error(f"[Binance] Possible symbol format issue. Check if {instrument} is available on Binance.")
+                    
+                if "timeout" in str(e).lower() or "connection" in str(e).lower():
+                    logger.error("[Binance] Network issue detected. Check connectivity to Binance API.")
+                
                 # Try another endpoint if available
                 if retries < max_retries - 1:
                     BinanceProvider.switch_endpoint()
                     retries += 1
                     await asyncio.sleep(1)  # Brief delay before retry
                 else:
+                    logger.error(f"[Binance] Exhausted all {max_retries} retries for {instrument}. Giving up.")
                     return None
     
     @staticmethod
@@ -391,12 +410,23 @@ class BinanceProvider:
     @staticmethod
     def _format_symbol(instrument: str) -> str:
         """Format instrument symbol for Binance API"""
+        logger.info(f"[Binance] Formatting symbol: {instrument}")
+        
+        # Ensure uppercase and remove slashes
         instrument = instrument.upper().replace("/", "")
         
-        # Ensure proper format for Binance (BTCUSD -> BTCUSDT)
+        # Make sure crypto symbols end with USDT for Binance
         if instrument.endswith("USD") and not instrument.endswith("USDT"):
             instrument = instrument.replace("USD", "USDT")
+            logger.info(f"[Binance] Converted USD to USDT: {instrument}")
         
+        # Handle common crypto symbols without USD suffix (e.g., BTC -> BTCUSDT)
+        common_crypto_symbols = ["BTC", "ETH", "XRP", "DOT", "ADA", "SOL", "DOGE", "AVAX", "MATIC"]
+        if instrument in common_crypto_symbols:
+            instrument = f"{instrument}USDT"
+            logger.info(f"[Binance] Added USDT suffix to common crypto: {instrument}")
+        
+        logger.info(f"[Binance] Final formatted symbol: {instrument}")
         return instrument
     
     @staticmethod
