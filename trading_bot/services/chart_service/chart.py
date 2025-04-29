@@ -150,27 +150,42 @@ class ChartService:
             
             # Normaliseer instrument (verwijder /)
             normalized_instrument = instrument.upper().replace("/", "")
+            logger.info(f"Normalized instrument: {normalized_instrument}")
             
             # 1. Zoek de TradingView URL op
             chart_url = self.chart_links.get(normalized_instrument)
+            logger.info(f"Chart URL lookup result for {normalized_instrument}: {'Found URL' if chart_url else 'No URL found'}")
 
             if chart_url:
                 # 2. Probeer TradingView screenshot te maken
                 logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
-                chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+                
+                # EXTRA DEBUG: Log before capturing tradingview screenshot
+                logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
+                try:
+                    screenshot_start = time.time()
+                    chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+                    screenshot_end = time.time()
+                    logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
+                except Exception as screen_e:
+                    logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
+                    chart_image = None
             else:
                 logger.warning(f"No TradingView URL found for instrument: {normalized_instrument}")
 
             # 3. Als TradingView mislukt (of geen URL), gebruik fallback
             if chart_image is None:
                 logger.warning(f"TradingView screenshot failed or URL not found for {normalized_instrument}. Using fallback chart.")
+                fallback_start = time.time()
                 chart_image = await self._generate_random_chart(normalized_instrument, timeframe)
+                fallback_end = time.time()
+                logger.info(f"Fallback chart generated in {fallback_end - fallback_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
 
         except Exception as e:
-            logger.error(f"Error getting chart for {normalized_instrument}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting chart for {instrument}: {str(e)}", exc_info=True)
             # Generate a simple random chart as emergency fallback
-            logger.warning(f"Using fallback chart due to unexpected error for {normalized_instrument}")
-            chart_image = await self._generate_random_chart(normalized_instrument, timeframe)
+            logger.warning(f"Using fallback chart due to unexpected error for {instrument}")
+            chart_image = await self._generate_random_chart(instrument, timeframe)
             
         return chart_image if chart_image is not None else b'' # Return empty bytes if all fails
 
@@ -378,49 +393,98 @@ class ChartService:
             return b''
 
     async def _capture_tradingview_screenshot(self, url: str, instrument: str) -> Optional[bytes]:
-        """Attempts to capture a screenshot of a TradingView chart using Playwright."""
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-        screenshot_bytes: Optional[bytes] = None
-        browser = None
-        playwright = None
-
-        logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
-
+        """Capture screenshot of TradingView chart using Playwright"""
         try:
-            playwright = await async_playwright().start()
-            # Try launching Chromium. Add options if needed (e.g., proxy).
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
+            logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
+            
+            # EXTRA DEBUG: Check if we can import playwright
+            try:
+                import playwright
+                logger.info(f"Playwright module imported successfully, version: {getattr(playwright, '__version__', 'unknown')}")
+                from playwright.async_api import async_playwright
+                logger.info("Playwright async_api successfully imported")
+            except ImportError as import_e:
+                logger.error(f"Failed to import playwright: {str(import_e)}. Screenshot will fail.")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                return None
+            except Exception as other_e:
+                logger.error(f"Unknown error during playwright import: {str(other_e)}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                return None
+                
+            # Launch playwright
+            logger.info(f"Launching async_playwright for {instrument}")
+            async with async_playwright() as p:
+                try:
+                    # Launch browser with specific options
+                    logger.info(f"Launching browser for {instrument}")
+                    browser = await p.chromium.launch(headless=True)
+                except Exception as browser_e:
+                    logger.error(f"Failed to launch browser for {instrument}: {str(browser_e)}")
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    return None
 
-            # Increase navigation timeout and wait until page load event (less strict than networkidle)
-            await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
-            logger.info(f"Page loaded (load event): {url}")
+                try:
+                    # Create a new page with larger viewport
+                    logger.info(f"Creating browser page for {instrument}")
+                    page = await browser.new_page()
+                except Exception as page_e:
+                    logger.error(f"Failed to create page for {instrument}: {str(page_e)}")
+                    await browser.close()
+                    return None
 
-            # --- Simulate Shift+F for fullscreen ---
-            logger.info("Simulating Shift+F for fullscreen...")
-            await page.keyboard.press('Shift+F')
+                try:
+                    # Increase navigation timeout and wait until page load event (less strict than networkidle)
+                    logger.info(f"Navigating to URL for {instrument}: {url}")
+                    await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
+                    logger.info(f"Page loaded (load event): {url}")
+                except playwright._impl._api_types.TimeoutError as timeout_e:
+                    logger.error(f"Playwright TimeoutError during operation for {instrument} at {url}: {str(timeout_e)}")
+                    await browser.close()
+                    return None
+                except Exception as goto_e:
+                    logger.error(f"Failed during page.goto for {instrument}: {str(goto_e)}")
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    await browser.close()
+                    return None
 
-            # Wait a bit for the fullscreen transition to potentially complete
-            await asyncio.sleep(4) # Increased wait time to 4 seconds for stability
-            logger.info("Waited after Shift+F.")
+                try:
+                    # --- Simulate Shift+F for fullscreen ---
+                    logger.info(f"Simulating Shift+F for fullscreen...")
+                    await page.keyboard.press("Shift+F")
+                    
+                    # Wait additional time for fullscreen transition
+                    logger.info(f"Waiting after Shift+F.")
+                    await asyncio.sleep(4)
+                except Exception as key_e:
+                    logger.error(f"Failed during keyboard press for {instrument}: {str(key_e)}")
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    # Continue, screenshot might still work
 
-            # --- Take screenshot of the full page ---
-            logger.info("Taking full page screenshot...")
-            screenshot_bytes = await page.screenshot(full_page=True, type='png', timeout=30000) # Added timeout
-            logger.info(f"Successfully captured full page screenshot for {instrument}")
-
-        except PlaywrightTimeoutError as pte:
-            logger.error(f"Playwright TimeoutError during operation for {instrument} at {url}: {pte}")
+                try:
+                    # Take screenshot (now fullscreen hopefully)
+                    logger.info(f"Taking full page screenshot...")
+                    screenshot_bytes = await page.screenshot(full_page=True)
+                    logger.info(f"Successfully captured full page screenshot for {instrument}")
+                except Exception as screenshot_e:
+                    logger.error(f"Failed to take screenshot for {instrument}: {str(screenshot_e)}")
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    await browser.close()
+                    return None
+                
+                # Close browser
+                try:
+                    await browser.close()
+                    logger.info(f"Playwright cleanup completed for {instrument}")
+                except Exception as close_e:
+                    logger.error(f"Error during browser cleanup for {instrument}: {str(close_e)}")
+                
+                return screenshot_bytes
+                
         except Exception as e:
-            logger.error(f"Error capturing TradingView screenshot for {instrument}: {str(e)}", exc_info=True)
-        finally:
-            if browser:
-                await browser.close()
-            if playwright:
-                await playwright.stop()
-            logger.info(f"Playwright cleanup completed for {instrument}")
-
-        return screenshot_bytes
+            logger.error(f"Unexpected error during TradingView screenshot capture for {instrument}: {str(e)}")
+            logger.error(f"Exception details: {traceback.format_exc()}")
+            return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
         """
