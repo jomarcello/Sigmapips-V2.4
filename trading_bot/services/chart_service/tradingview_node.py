@@ -210,73 +210,122 @@ class TradingViewNodeService(TradingViewService):
     
     async def take_screenshot_of_url(self, url: str, fullscreen: bool = False) -> Optional[bytes]:
         """Take a screenshot of a URL using Node.js"""
+        start_time = time.time()
+        logger.info(f"[START] Take screenshot of URL: {url} (fullscreen: {fullscreen})")
+        
         try:
-            # Cache checking removed
-            
             # Genereer een unieke bestandsnaam voor de screenshot
             timestamp = int(time.time())
-            screenshot_path = os.path.join(os.path.dirname(self.script_path), f"screenshot_{timestamp}.png")
+            screenshot_id = f"{timestamp}_{hash(url) % 10000}"
+            screenshot_path = os.path.join(os.path.dirname(self.script_path), f"screenshot_{screenshot_id}.png")
             
             # Zorg ervoor dat de URL geen aanhalingstekens bevat
             url = url.strip('"\'')
             
-            # Gebruik session_id in plaats van tradingview_username
-            # Voeg fullscreen parameter toe aan het commando
+            # Voeg session ID en timeouts toe aan het commando
             cmd = f"node {self.script_path} \"{url}\" \"{screenshot_path}\" \"{self.session_id}\""
             
             # Voeg fullscreen parameter toe als dat nodig is
             if fullscreen or "fullscreen=true" in url:
                 cmd += " fullscreen"
+                
+            # Voeg extra wachttijd toe aan het commando
+            cmd += " 45000"  # 45 seconden wachttijd max voor paginalading
             
             # Verwijder eventuele puntkomma's uit het commando
             cmd = cmd.replace(";", "")
             
-            # Gebruik asyncio.create_subprocess_shell met een timeout om te voorkomen dat het script vastloopt
+            logger.info(f"[EXEC] Executing Node.js command: {cmd}")
+            
+            # Gebruik asyncio.create_subprocess_shell met een langere timeout
             try:
+                process_start = time.time()
+                logger.info(f"[PROC] Starting Node.js process")
+                
                 process = await asyncio.create_subprocess_shell(
                     cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
                 
-                # Wacht op het proces met een kortere timeout (20 seconden max)
+                # Wacht op het proces met een langere timeout (45 seconden max)
                 try:
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=20.0)
+                    logger.info(f"[PROC] Waiting for Node.js process to complete (timeout: 45s)")
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=45.0)
+                    
+                    process_end = time.time()
+                    process_time = process_end - process_start
+                    logger.info(f"[PROC] Node.js process completed in {process_time:.2f} seconds")
+                    
+                    # Log the standard output if not empty
+                    if stdout:
+                        stdout_output = stdout.decode().strip()
+                        if stdout_output:
+                            logger.info(f"[PROC] Node.js stdout: {stdout_output}")
+                    
                 except asyncio.TimeoutError:
-                    logger.error("Timeout waiting for Node.js script, terminating process")
+                    logger.error(f"[PROC] TIMEOUT waiting for Node.js script (45s), terminating process")
                     try:
                         process.kill()
+                        logger.info(f"[PROC] Process killed successfully")
                     except Exception as kill_error:
-                        logger.error(f"Error killing process: {str(kill_error)}")
+                        logger.error(f"[PROC] Error killing process: {str(kill_error)}")
                     return None
                 
-                # Only log errors, not standard output
+                # Log errors if any
                 if stderr:
-                    stderr_output = stderr.decode()
-                    if stderr_output.strip():  # Only log if there's actual content
-                        logger.error(f"Node.js stderr: {stderr_output}")
+                    stderr_output = stderr.decode().strip()
+                    if stderr_output:
+                        logger.error(f"[PROC] Node.js stderr: {stderr_output}")
                 
-                # Controleer of het bestand bestaat
+                # Controleer of het bestand bestaat met extra logging
+                file_check_start = time.time()
                 if os.path.exists(screenshot_path):
+                    file_size = os.path.getsize(screenshot_path)
+                    logger.info(f"[FILE] Screenshot file found: {screenshot_path} (size: {file_size} bytes)")
+                    
+                    # Controleer of het bestand een minimale grootte heeft
+                    if file_size < 5000:  # Minder dan 5KB is waarschijnlijk geen echte screenshot
+                        logger.warning(f"[FILE] Screenshot file is suspiciously small: {file_size} bytes")
+                    
                     # Lees het bestand
                     with open(screenshot_path, 'rb') as f:
                         screenshot_data = f.read()
+                        logger.info(f"[FILE] Screenshot file read successfully: {len(screenshot_data)} bytes")
                     
                     # Verwijder het bestand
                     try:
                         os.remove(screenshot_path)
+                        logger.info(f"[FILE] Screenshot file removed successfully")
                     except Exception as e:
-                        logger.warning(f"Failed to remove temporary screenshot file: {str(e)}")
+                        logger.warning(f"[FILE] Failed to remove temporary screenshot file: {str(e)}")
                     
-                    # Return the screenshot data directly without caching
+                    # Log de totale tijd
+                    total_time = time.time() - start_time
+                    logger.info(f"[DONE] Screenshot capture completed in {total_time:.2f} seconds with success")
+                    
+                    # Return the screenshot data
                     return screenshot_data
                 else:
-                    logger.error(f"Screenshot file not found: {screenshot_path}")
+                    logger.error(f"[FILE] Screenshot file not found: {screenshot_path}")
+                    
+                    # Controleer of er andere screenshot bestanden zijn in dezelfde map
+                    try:
+                        directory = os.path.dirname(screenshot_path)
+                        files = [f for f in os.listdir(directory) if f.startswith("screenshot_")]
+                        if files:
+                            logger.info(f"[FILE] Found other screenshot files in directory: {files}")
+                    except Exception as e:
+                        logger.error(f"[FILE] Error checking directory for other screenshot files: {str(e)}")
+                    
                     return None
+                    
             except Exception as process_error:
-                logger.error(f"Error running Node.js process: {str(process_error)}")
+                logger.error(f"[PROC] Error running Node.js process: {str(process_error)}")
+                logger.error(f"[PROC] Traceback: {traceback.format_exc()}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error taking screenshot: {str(e)}")
+            logger.error(f"[ERROR] Error taking screenshot: {str(e)}")
+            logger.error(f"[ERROR] Traceback: {traceback.format_exc()}")
             return None
