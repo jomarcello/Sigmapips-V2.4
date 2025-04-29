@@ -438,35 +438,17 @@ class ChartService:
                             formatted_symbol = None
                             if hasattr(provider, '_format_symbol'):
                                 try:
-                                    formatted_symbol = provider._format_symbol(instrument)
-                                    logger.info(f"Yahoo Finance formatted symbol: {formatted_symbol}")
-                                    
-                                    # If this is a commodity, override the symbol format
-                                    if market_type == "commodity":
-                                        if instrument == "XAUUSD":
-                                            formatted_symbol = "GC=F"
-                                            logger.info(f"Override: Using {formatted_symbol} for gold")
-                                        elif instrument == "XAGUSD":
-                                            formatted_symbol = "SI=F"
-                                            logger.info(f"Override: Using {formatted_symbol} for silver")
-                                        elif instrument in ["XTIUSD", "WTIUSD"]:
-                                            formatted_symbol = "CL=F"
-                                            logger.info(f"Override: Using {formatted_symbol} for crude oil")
-                                        elif instrument == "XBRUSD":
-                                            formatted_symbol = "BZ=F"
-                                            logger.info(f"Override: Using {formatted_symbol} for brent crude")
-                                        
-                                        # Use the formatted symbol directly for commodities
-                                        market_data = await provider.get_market_data(formatted_symbol, timeframe)
-                                    else:
-                                        market_data = await provider.get_market_data(instrument, timeframe)
-                                except Exception as format_e:
-                                    logger.error(f"Error formatting symbol: {str(format_e)}")
+                                    # Let the provider format the symbol internally
+                                    logger.info(f"Provider will format symbol internally for: {instrument}")
                                     market_data = await provider.get_market_data(instrument, timeframe)
+                                except Exception as format_e:
+                                    logger.error(f"Error during market data fetch (symbol formatting might be internal): {str(format_e)}")
+                                    market_data = await provider.get_market_data(instrument, timeframe) # Fallback to original instrument
                             else:
-                                logger.info("Yahoo provider missing _format_symbol method")
+                                logger.warning("Yahoo provider missing _format_symbol method, calling with original instrument")
                                 market_data = await provider.get_market_data(instrument, timeframe)
                         else:
+                            # For other providers (e.g., Binance), call normally
                             market_data = await provider.get_market_data(instrument, timeframe)
                         
                         # More detailed logging about the result
@@ -622,7 +604,6 @@ class ChartService:
                         }
                         
                         logger.info(f"Successfully calculated indicators for {instrument}")
-                        
                     except Exception as calc_e:
                         logger.error(f"Error calculating indicators: {str(calc_e)}")
                         logger.error(traceback.format_exc())
@@ -637,6 +618,7 @@ class ChartService:
                     current_price = analysis_data["close"]
                     ema_20 = analysis_data["ema_20"]
                     ema_50 = analysis_data["ema_50"]
+                    ema_200 = analysis_data["ema_200"]
                     rsi = analysis_data["rsi"]
                     macd = analysis_data["macd"]
                     macd_signal = analysis_data["macd_signal"]
@@ -713,77 +695,62 @@ class ChartService:
                     # Key levels section
                     analysis_text += f"🔑 <b>Key Levels</b>\n"
                     if instrument == "XAUUSD":
-                        # Format gold support/resistance levels with comma after first digit
-                        daily_low_first_digit = str(int(analysis_data['low']))[0]
-                        daily_low_rest_digits = f"{analysis_data['low']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['low']:.3f}".split('.')[1]
-                        formatted_daily_low = f"{daily_low_first_digit},{daily_low_rest_digits}"
-                        
-                        weekly_low_first_digit = str(int(analysis_data['low'] * 0.98))[0]
-                        weekly_low_rest_digits = f"{analysis_data['low'] * 0.98:.3f}".split('.')[0][1:] + "." + f"{analysis_data['low'] * 0.98:.3f}".split('.')[1]
-                        formatted_weekly_low = f"{weekly_low_first_digit},{weekly_low_rest_digits}"
-                        
-                        daily_high_first_digit = str(int(analysis_data['high']))[0]
-                        daily_high_rest_digits = f"{analysis_data['high']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['high']:.3f}".split('.')[1]
-                        formatted_daily_high = f"{daily_high_first_digit},{daily_high_rest_digits}"
-                        
-                        weekly_high_first_digit = str(int(analysis_data['high'] * 1.02))[0]
-                        weekly_high_rest_digits = f"{analysis_data['high'] * 1.02:.3f}".split('.')[0][1:] + "." + f"{analysis_data['high'] * 1.02:.3f}".split('.')[1]
-                        formatted_weekly_high = f"{weekly_high_first_digit},{weekly_high_rest_digits}"
-                        
-                        analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                        analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                        # Format gold prices with comma after first digit
+                        def format_gold(price):
+                            price_str = f"{price:.3f}"
+                            parts = price_str.split('.')
+                            return f"{parts[0][0]},{parts[0][1:]}.{parts[1]}"
+
+                        analysis_text += f"Daily High:   {format_gold(analysis_data['high'])}\n"
+                        analysis_text += f"Daily Low:    {format_gold(analysis_data['low'])}\n"
+                        analysis_text += f"Weekly High:  {format_gold(analysis_data['high'] * 1.02)}\n"
+                        analysis_text += f"Weekly Low:   {format_gold(analysis_data['low'] * 0.98)}\n\n"
+
                     elif instrument == "US30":
-                        # Format US30 support/resistance with comma after second digit
-                        daily_low_digits = str(int(analysis_data['low']))
-                        formatted_daily_low = f"{daily_low_digits[:2]},{daily_low_digits[2:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                        
-                        weekly_low_digits = str(int(analysis_data['low'] * 0.98))
-                        formatted_weekly_low = f"{weekly_low_digits[:2]},{weekly_low_digits[2:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                        
-                        daily_high_digits = str(int(analysis_data['high']))
-                        formatted_daily_high = f"{daily_high_digits[:2]},{daily_high_digits[2:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                        
-                        weekly_high_digits = str(int(analysis_data['high'] * 1.02))
-                        formatted_weekly_high = f"{weekly_high_digits[:2]},{weekly_high_digits[2:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                        
-                        analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                        analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                        # Format US30 prices with comma after second digit
+                        def format_us30(price):
+                            price_str = f"{price:.2f}"
+                            parts = price_str.split('.')
+                            digits = parts[0]
+                            return f"{digits[:2]},{digits[2:]}.{parts[1]}"
+
+                        analysis_text += f"Daily High:   {format_us30(analysis_data['high'])}\n"
+                        analysis_text += f"Daily Low:    {format_us30(analysis_data['low'])}\n"
+                        analysis_text += f"Weekly High:  {format_us30(analysis_data['high'] * 1.02)}\n"
+                        analysis_text += f"Weekly Low:   {format_us30(analysis_data['low'] * 0.98)}\n\n"
+
                     elif instrument == "US500":
-                        # Format US500 support/resistance with comma after first digit
-                        daily_low_digits = str(int(analysis_data['low']))
-                        formatted_daily_low = f"{daily_low_digits[0]},{daily_low_digits[1:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                        
-                        weekly_low_digits = str(int(analysis_data['low'] * 0.98))
-                        formatted_weekly_low = f"{weekly_low_digits[0]},{weekly_low_digits[1:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                        
-                        daily_high_digits = str(int(analysis_data['high']))
-                        formatted_daily_high = f"{daily_high_digits[0]},{daily_high_digits[1:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                        
-                        weekly_high_digits = str(int(analysis_data['high'] * 1.02))
-                        formatted_weekly_high = f"{weekly_high_digits[0]},{weekly_high_digits[1:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                        
-                        analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                        analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                        # Format US500 prices with comma after first digit
+                        def format_us500(price):
+                            price_str = f"{price:.2f}"
+                            parts = price_str.split('.')
+                            digits = parts[0]
+                            return f"{digits[0]},{digits[1:]}.{parts[1]}"
+
+                        analysis_text += f"Daily High:   {format_us500(analysis_data['high'])}\n"
+                        analysis_text += f"Daily Low:    {format_us500(analysis_data['low'])}\n"
+                        analysis_text += f"Weekly High:  {format_us500(analysis_data['high'] * 1.02)}\n"
+                        analysis_text += f"Weekly Low:   {format_us500(analysis_data['low'] * 0.98)}\n\n"
+
                     elif instrument == "US100":
-                        # Format US100 support/resistance with comma after second digit
-                        daily_low_digits = str(int(analysis_data['low']))
-                        formatted_daily_low = f"{daily_low_digits[:2]},{daily_low_digits[2:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                        
-                        weekly_low_digits = str(int(analysis_data['low'] * 0.98))
-                        formatted_weekly_low = f"{weekly_low_digits[:2]},{weekly_low_digits[2:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                        
-                        daily_high_digits = str(int(analysis_data['high']))
-                        formatted_daily_high = f"{daily_high_digits[:2]},{daily_high_digits[2:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                        
-                        weekly_high_digits = str(int(analysis_data['high'] * 1.02))
-                        formatted_weekly_high = f"{weekly_high_digits[:2]},{weekly_high_digits[2:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                        
-                        analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                        analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                        # Format US100 prices with comma after second digit
+                        def format_us100(price):
+                            price_str = f"{price:.2f}"
+                            parts = price_str.split('.')
+                            digits = parts[0]
+                            return f"{digits[:2]},{digits[2:]}.{parts[1]}"
+
+                        analysis_text += f"Daily High:   {format_us100(analysis_data['high'])}\n"
+                        analysis_text += f"Daily Low:    {format_us100(analysis_data['low'])}\n"
+                        analysis_text += f"Weekly High:  {format_us100(analysis_data['high'] * 1.02)}\n"
+                        analysis_text += f"Weekly Low:   {format_us100(analysis_data['low'] * 0.98)}\n\n"
                     else:
-                        analysis_text += f"Support: {analysis_data['low']:.{precision}f} (daily low), {analysis_data['low'] * 0.98:.{precision}f} (weekly low)\n"
-                        analysis_text += f"Resistance: {analysis_data['high']:.{precision}f} (daily high), {analysis_data['high'] * 1.02:.{precision}f} (weekly high)\n\n"
-                    
+                        # Default formatting
+                        analysis_text += f"Daily High:   {analysis_data['high']:.{precision}f}\n"
+                        analysis_text += f"Daily Low:    {analysis_data['low']:.{precision}f}\n"
+                        analysis_text += f"Weekly High:  {analysis_data['high'] * 1.02:.{precision}f}\n"
+                        analysis_text += f"Weekly Low:   {analysis_data['low'] * 0.98:.{precision}f}\n\n"
+
                     # Technical indicators section
                     analysis_text += f"📈 <b>Technical Indicators</b>\n"
                     analysis_text += f"RSI: {rsi:.2f} (neutral)\n"
@@ -1019,6 +986,12 @@ class ChartService:
                     # Cache the analysis
                     self.analysis_cache[cache_key] = (current_time, analysis_text)
                     
+                    # --- DEBUG PRINT ADDED ---
+                    print(f"\n--- DEBUG: Final analysis_text for {instrument} ---")
+                    print(analysis_text)
+                    print("--- END DEBUG ---\n")
+                    # --- END DEBUG PRINT ---
+                    
                     return analysis_text
                 else:
                     # Log detailed information about API failures
@@ -1100,11 +1073,11 @@ class ChartService:
                 daily_variation = random.uniform(0.01, 0.03)  # 1-3% daily variation
                 weekly_variation = random.uniform(0.03, 0.08)  # 3-8% weekly variation
             elif any(index in instrument for index in ["US30", "US500", "US100", "UK100", "DE40", "JP225"]):
-                # Indices have moderate volatility
+                # US indices often have higher RSI values in bull markets
                 daily_variation = random.uniform(0.005, 0.015)  # 0.5-1.5% daily variation
                 weekly_variation = random.uniform(0.01, 0.04)  # 1-4% weekly variation
             elif any(commodity in instrument for commodity in ["XAUUSD", "XAGUSD", "WTIUSD", "XTIUSD"]):
-                # Commodities have higher volatility than forex but lower than crypto
+                # Commodities like gold and silver - slightly bullish in uncertain markets
                 daily_variation = random.uniform(0.008, 0.02)  # 0.8-2% daily variation
                 weekly_variation = random.uniform(0.02, 0.06)  # 2-6% weekly variation
             else:
@@ -1228,77 +1201,62 @@ class ChartService:
             # Key levels section
             analysis_text += f"🔑 <b>Key Levels</b>\n"
             if instrument == "XAUUSD":
-                # Format gold support/resistance levels with comma after first digit
-                daily_low_first_digit = str(int(daily_low))[0]
-                daily_low_rest_digits = f"{daily_low:.3f}".split('.')[0][1:] + "." + f"{daily_low:.3f}".split('.')[1]
-                formatted_daily_low = f"{daily_low_first_digit},{daily_low_rest_digits}"
-                
-                weekly_low_first_digit = str(int(weekly_low))[0]
-                weekly_low_rest_digits = f"{weekly_low:.3f}".split('.')[0][1:] + "." + f"{weekly_low:.3f}".split('.')[1]
-                formatted_weekly_low = f"{weekly_low_first_digit},{weekly_low_rest_digits}"
-                
-                daily_high_first_digit = str(int(daily_high))[0]
-                daily_high_rest_digits = f"{daily_high:.3f}".split('.')[0][1:] + "." + f"{daily_high:.3f}".split('.')[1]
-                formatted_daily_high = f"{daily_high_first_digit},{daily_high_rest_digits}"
-                
-                weekly_high_first_digit = str(int(weekly_high))[0]
-                weekly_high_rest_digits = f"{weekly_high:.3f}".split('.')[0][1:] + "." + f"{weekly_high:.3f}".split('.')[1]
-                formatted_weekly_high = f"{weekly_high_first_digit},{weekly_high_rest_digits}"
-                
-                analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                # Format gold prices with comma after first digit
+                def format_gold(price):
+                    price_str = f"{price:.3f}"
+                    parts = price_str.split('.')
+                    return f"{parts[0][0]},{parts[0][1:]}.{parts[1]}"
+
+                analysis_text += f"Daily High:   {format_gold(daily_high)}\n"
+                analysis_text += f"Daily Low:    {format_gold(daily_low)}\n"
+                analysis_text += f"Weekly High:  {format_gold(weekly_high)}\n"
+                analysis_text += f"Weekly Low:   {format_gold(weekly_low)}\n\n"
+
             elif instrument == "US30":
-                # Format US30 support/resistance with comma after second digit
-                daily_low_digits = str(int(daily_low))
-                formatted_daily_low = f"{daily_low_digits[:2]},{daily_low_digits[2:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                
-                weekly_low_digits = str(int(weekly_low))
-                formatted_weekly_low = f"{weekly_low_digits[:2]},{weekly_low_digits[2:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                
-                daily_high_digits = str(int(daily_high))
-                formatted_daily_high = f"{daily_high_digits[:2]},{daily_high_digits[2:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                
-                weekly_high_digits = str(int(weekly_high))
-                formatted_weekly_high = f"{weekly_high_digits[:2]},{weekly_high_digits[2:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                
-                analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                # Format US30 prices with comma after second digit
+                def format_us30(price):
+                    price_str = f"{price:.2f}"
+                    parts = price_str.split('.')
+                    digits = parts[0]
+                    return f"{digits[:2]},{digits[2:]}.{parts[1]}"
+
+                analysis_text += f"Daily High:   {format_us30(daily_high)}\n"
+                analysis_text += f"Daily Low:    {format_us30(daily_low)}\n"
+                analysis_text += f"Weekly High:  {format_us30(weekly_high)}\n"
+                analysis_text += f"Weekly Low:   {format_us30(weekly_low)}\n\n"
+
             elif instrument == "US500":
-                # Format US500 support/resistance with comma after first digit
-                daily_low_digits = str(int(daily_low))
-                formatted_daily_low = f"{daily_low_digits[0]},{daily_low_digits[1:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                
-                weekly_low_digits = str(int(weekly_low))
-                formatted_weekly_low = f"{weekly_low_digits[0]},{weekly_low_digits[1:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                
-                daily_high_digits = str(int(daily_high))
-                formatted_daily_high = f"{daily_high_digits[0]},{daily_high_digits[1:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                
-                weekly_high_digits = str(int(weekly_high))
-                formatted_weekly_high = f"{weekly_high_digits[0]},{weekly_high_digits[1:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                
-                analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                # Format US500 prices with comma after first digit
+                def format_us500(price):
+                    price_str = f"{price:.2f}"
+                    parts = price_str.split('.')
+                    digits = parts[0]
+                    return f"{digits[0]},{digits[1:]}.{parts[1]}"
+
+                analysis_text += f"Daily High:   {format_us500(daily_high)}\n"
+                analysis_text += f"Daily Low:    {format_us500(daily_low)}\n"
+                analysis_text += f"Weekly High:  {format_us500(weekly_high)}\n"
+                analysis_text += f"Weekly Low:   {format_us500(weekly_low)}\n\n"
+
             elif instrument == "US100":
-                # Format US100 support/resistance with comma after second digit
-                daily_low_digits = str(int(daily_low))
-                formatted_daily_low = f"{daily_low_digits[:2]},{daily_low_digits[2:]}.{f'{daily_low:.2f}'.split('.')[1]}"
-                
-                weekly_low_digits = str(int(weekly_low))
-                formatted_weekly_low = f"{weekly_low_digits[:2]},{weekly_low_digits[2:]}.{f'{weekly_low:.2f}'.split('.')[1]}"
-                
-                daily_high_digits = str(int(daily_high))
-                formatted_daily_high = f"{daily_high_digits[:2]},{daily_high_digits[2:]}.{f'{daily_high:.2f}'.split('.')[1]}"
-                
-                weekly_high_digits = str(int(weekly_high))
-                formatted_weekly_high = f"{weekly_high_digits[:2]},{weekly_high_digits[2:]}.{f'{weekly_high:.2f}'.split('.')[1]}"
-                
-                analysis_text += f"Support: {formatted_daily_low} (daily low), {formatted_weekly_low} (weekly low)\n"
-                analysis_text += f"Resistance: {formatted_daily_high} (daily high), {formatted_weekly_high} (weekly high)\n\n"
+                # Format US100 prices with comma after second digit
+                def format_us100(price):
+                    price_str = f"{price:.2f}"
+                    parts = price_str.split('.')
+                    digits = parts[0]
+                    return f"{digits[:2]},{digits[2:]}.{parts[1]}"
+
+                analysis_text += f"Daily High:   {format_us100(daily_high)}\n"
+                analysis_text += f"Daily Low:    {format_us100(daily_low)}\n"
+                analysis_text += f"Weekly High:  {format_us100(weekly_high)}\n"
+                analysis_text += f"Weekly Low:   {format_us100(weekly_low)}\n\n"
             else:
-                analysis_text += f"Support: {daily_low:.{precision}f} (daily low), {weekly_low:.{precision}f} (weekly low)\n"
-                analysis_text += f"Resistance: {daily_high:.{precision}f} (daily high), {weekly_high:.{precision}f} (weekly high)\n\n"
-            
+                # Default formatting
+                analysis_text += f"Daily High:   {daily_high:.{precision}f}\n"
+                analysis_text += f"Daily Low:    {daily_low:.{precision}f}\n"
+                analysis_text += f"Weekly High:  {weekly_high:.{precision}f}\n"
+                analysis_text += f"Weekly Low:   {weekly_low:.{precision}f}\n\n"
+
             # Technical indicators section
             analysis_text += f"📈 <b>Technical Indicators</b>\n"
             analysis_text += f"RSI: {rsi:.2f} (neutral)\n"
