@@ -26,7 +26,7 @@ from trading_bot.services.chart_service.base import TradingViewService
 # Import providers
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
-# from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
+from trading_bot.services.chart_service.alltick_provider import AllTickProvider
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class ChartService:
             self.chart_providers = [
                 BinanceProvider(),      # Eerst Binance voor crypto's
                 YahooFinanceProvider(), # Dan Yahoo Finance voor andere markten
-                # TradingViewNodeService(), # VERWIJDERD
+                AllTickProvider(),      # AllTickProvider als backup voor Binance
             ]
             
             # Initialiseer de chart links met de specifieke TradingView links
@@ -133,14 +133,7 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            # Initialize tradingview node service - VERWIJDERD
-            # self.tradingview_node = next((p for p in self.chart_providers if isinstance(p, TradingViewNodeService)), None)
-            # if self.tradingview_node:
-            #     logging.info("TradingViewNodeService provider found")
-            # else:
-            #     logging.warning("TradingViewNodeService provider not found in chart_providers")
-            
-            logging.info("Chart service initialized with providers: Binance, YahooFinance") # UPDATED LOG
+            logging.info("Chart service initialized with providers: Binance, YahooFinance, AllTick") # UPDATED LOG
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
@@ -201,11 +194,6 @@ class ChartService:
         logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
         for provider in self.chart_providers:
             try:
-                # REMOVED check for tradingview provider as it's no longer in the list
-                # if 'tradingview' in provider.__class__.__name__.lower():
-                #     # Skip TradingView provider because we already tried it above
-                #     continue
-                    
                 logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                 chart_data = await provider.get_chart(instrument, timeframe)
                 if chart_data:
@@ -647,7 +635,11 @@ class ChartService:
             is_crypto = market_type == "crypto" or "BTC" in instrument or "ETH" in instrument or instrument.endswith("USD") or instrument.endswith("USDT")
             if is_crypto:
                 logger.info(f"Extra check confirms {instrument} is crypto - guaranteeing appropriate providers")
-                
+        except Exception as e:
+            logger.error(f"Error in initial setup for technical analysis: {str(e)}")
+            return await self._generate_default_analysis(instrument, timeframe)
+            
+        try:
             # Get the available data providers
             binance_provider = None
             yahoo_provider = None
@@ -1015,6 +1007,32 @@ class ChartService:
                         formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
                         
                         analysis_text += f"Price is currently trading near current price of {formatted_price}, "
+                    elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
+                        # Format cryptocurrency price using the format_crypto function
+                        def format_crypto(price):
+                            # Bitcoin and high-value coins (>1000) - format with commas for thousands
+                            if price > 1000:
+                                price_str = f"{price:.2f}"
+                                parts = price_str.split('.')
+                                # Format large numbers with commas (e.g., 68,000.00)
+                                formatted_integer = ""
+                                for i, char in enumerate(reversed(parts[0])):
+                                    if i > 0 and i % 3 == 0:
+                                        formatted_integer = "," + formatted_integer
+                                    formatted_integer = char + formatted_integer
+                                return f"{formatted_integer}.{parts[1]}"
+                            # Medium value coins ($10-$999)
+                            elif price > 10:
+                                return f"{price:.2f}"
+                            # Low value coins ($0.10-$9.99)
+                            elif price > 0.1:
+                                return f"{price:.3f}"
+                            # Very low value coins (<$0.10)
+                            else:
+                                return f"{price:.5f}"
+                        
+                        formatted_price = format_crypto(current_price)
+                        analysis_text += f"Price is currently trading near current price of {formatted_price}, "
                     else:
                         analysis_text += f"Price is currently trading near current price of {current_price:.{precision}f}, "
                     
@@ -1033,10 +1051,10 @@ class ChartService:
                             parts = price_str.split('.')
                             return f"{parts[0][0]},{parts[0][1:]}.{parts[1]}"
 
-                        analysis_text += f"Daily High:   {format_gold(analysis_data['high'])}\n"
-                        analysis_text += f"Daily Low:    {format_gold(analysis_data['low'])}\n"
-                        analysis_text += f"Weekly High:  {format_gold(analysis_data['high'] * 1.02)}\n"
-                        analysis_text += f"Weekly Low:   {format_gold(analysis_data['low'] * 0.98)}\n\n"
+                        analysis_text += f"Daily High:   {format_gold(daily_high)}\n"
+                        analysis_text += f"Daily Low:    {format_gold(daily_low)}\n"
+                        analysis_text += f"Weekly High:  {format_gold(weekly_high)}\n"
+                        analysis_text += f"Weekly Low:   {format_gold(weekly_low)}\n\n"
 
                     elif instrument == "US30":
                         # Format US30 prices with comma after second digit
@@ -1046,10 +1064,10 @@ class ChartService:
                             digits = parts[0]
                             return f"{digits[:2]},{digits[2:]}.{parts[1]}"
 
-                        analysis_text += f"Daily High:   {format_us30(analysis_data['high'])}\n"
-                        analysis_text += f"Daily Low:    {format_us30(analysis_data['low'])}\n"
-                        analysis_text += f"Weekly High:  {format_us30(analysis_data['high'] * 1.02)}\n"
-                        analysis_text += f"Weekly Low:   {format_us30(analysis_data['low'] * 0.98)}\n\n"
+                        analysis_text += f"Daily High:   {format_us30(daily_high)}\n"
+                        analysis_text += f"Daily Low:    {format_us30(daily_low)}\n"
+                        analysis_text += f"Weekly High:  {format_us30(weekly_high)}\n"
+                        analysis_text += f"Weekly Low:   {format_us30(weekly_low)}\n\n"
 
                     elif instrument == "US500":
                         # Format US500 prices with comma after first digit
@@ -1059,10 +1077,10 @@ class ChartService:
                             digits = parts[0]
                             return f"{digits[0]},{digits[1:]}.{parts[1]}"
 
-                        analysis_text += f"Daily High:   {format_us500(analysis_data['high'])}\n"
-                        analysis_text += f"Daily Low:    {format_us500(analysis_data['low'])}\n"
-                        analysis_text += f"Weekly High:  {format_us500(analysis_data['high'] * 1.02)}\n"
-                        analysis_text += f"Weekly Low:   {format_us500(analysis_data['low'] * 0.98)}\n\n"
+                        analysis_text += f"Daily High:   {format_us500(daily_high)}\n"
+                        analysis_text += f"Daily Low:    {format_us500(daily_low)}\n"
+                        analysis_text += f"Weekly High:  {format_us500(weekly_high)}\n"
+                        analysis_text += f"Weekly Low:   {format_us500(weekly_low)}\n\n"
 
                     elif instrument == "US100":
                         # Format US100 prices with comma after second digit
@@ -1072,25 +1090,59 @@ class ChartService:
                             digits = parts[0]
                             return f"{digits[:2]},{digits[2:]}.{parts[1]}"
 
-                        analysis_text += f"Daily High:   {format_us100(analysis_data['high'])}\n"
-                        analysis_text += f"Daily Low:    {format_us100(analysis_data['low'])}\n"
-                        analysis_text += f"Weekly High:  {format_us100(analysis_data['high'] * 1.02)}\n"
-                        analysis_text += f"Weekly Low:   {format_us100(analysis_data['low'] * 0.98)}\n\n"
+                        analysis_text += f"Daily High:   {format_us100(daily_high)}\n"
+                        analysis_text += f"Daily Low:    {format_us100(daily_low)}\n"
+                        analysis_text += f"Weekly High:  {format_us100(weekly_high)}\n"
+                        analysis_text += f"Weekly Low:   {format_us100(weekly_low)}\n\n"
+                    elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
+                        # Format cryptocurrency prices based on their value
+                        def format_crypto(price):
+                            # Bitcoin and high-value coins (>1000) - format with commas for thousands
+                            if price > 1000:
+                                price_str = f"{price:.2f}"
+                                parts = price_str.split('.')
+                                # Format large numbers with commas (e.g., 68,000.00)
+                                formatted_integer = ""
+                                for i, char in enumerate(reversed(parts[0])):
+                                    if i > 0 and i % 3 == 0:
+                                        formatted_integer = "," + formatted_integer
+                                    formatted_integer = char + formatted_integer
+                                return f"{formatted_integer}.{parts[1]}"
+                            # Medium value coins ($10-$999)
+                            elif price > 10:
+                                return f"{price:.2f}"
+                            # Low value coins ($0.10-$9.99)
+                            elif price > 0.1:
+                                return f"{price:.3f}"
+                            # Very low value coins (<$0.10)
+                            else:
+                                return f"{price:.5f}"
+
+                        analysis_text += f"Daily High:   {format_crypto(daily_high)}\n"
+                        analysis_text += f"Daily Low:    {format_crypto(daily_low)}\n"
+                        analysis_text += f"Weekly High:  {format_crypto(weekly_high)}\n"
+                        analysis_text += f"Weekly Low:   {format_crypto(weekly_low)}\n\n"
                     else:
-                        # Default formatting
-                        analysis_text += f"Daily High:   {analysis_data['high']:.{precision}f}\n"
-                        analysis_text += f"Daily Low:    {analysis_data['low']:.{precision}f}\n"
-                        analysis_text += f"Weekly High:  {analysis_data['high'] * 1.02:.{precision}f}\n"
-                        analysis_text += f"Weekly Low:   {analysis_data['low'] * 0.98:.{precision}f}\n\n"
+                        analysis_text += f"Daily High:   {daily_high:.{precision}f}\n"
+                        analysis_text += f"Daily Low:    {daily_low:.{precision}f}\n"
+                        analysis_text += f"Weekly High:  {weekly_high:.{precision}f}\n"
+                        analysis_text += f"Weekly Low:   {weekly_low:.{precision}f}\n\n"
 
                     # Technical indicators section
                     analysis_text += f"📈 <b>Technical Indicators</b>\n"
-                    analysis_text += f"RSI: {rsi:.2f} (neutral)\n"
+                    rsi_value = analysis_data.get('rsi', analysis_data.get('RSI', 50))
+                    if rsi_value > 70:
+                        rsi_status = "overbought"
+                    elif rsi_value < 30:
+                        rsi_status = "oversold"
+                    else:
+                        rsi_status = "neutral"
+                    analysis_text += f"RSI: {rsi_value:.2f} ({rsi_status})\n"
                     
-                    macd_value = random.uniform(-0.001, 0.001)
-                    macd_signal = random.uniform(-0.001, 0.001)
-                    macd_status = "bullish" if macd_value > macd_signal else "bearish"
-                    analysis_text += f"MACD: {macd_status} ({macd_value:.5f} is {'above' if macd_value > macd_signal else 'below'} signal {macd_signal:.5f})\n"
+                    macd = analysis_data.get("macd", analysis_data.get("MACD", 0))
+                    macd_signal = analysis_data.get("macd_signal", analysis_data.get("MACD_signal", 0))
+                    macd_status = "bullish" if macd > macd_signal else "bearish"
+                    analysis_text += f"MACD: {macd_status} ({macd:.5f} is {'above' if macd > macd_signal else 'below'} signal {macd_signal:.5f})\n"
                     
                     ma_status = "bullish" if trend == "BUY" else "bearish" if trend == "SELL" else "mixed"
                     if instrument == "XAUUSD":
@@ -1329,15 +1381,6 @@ class ChartService:
                     logger.error(f"Error getting analysis from providers: {str(e)}")
                     logger.error(traceback.format_exc())
                     return await self._generate_default_analysis(instrument, timeframe)
-            
-            else:
-                # Log detailed information about API failures
-                logger.warning(f"Failed to generate analysis for {instrument}, falling back to default")
-                return await self._generate_default_analysis(instrument, timeframe)
-        except Exception as e:
-            logger.error(f"Error getting analysis from providers: {str(e)}")
-            logger.error(traceback.format_exc())
-            return await self._generate_default_analysis(instrument, timeframe)
     
     async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
         """Generate a fallback analysis when the API fails"""
@@ -1517,9 +1560,35 @@ class ChartService:
                 formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
                 
                 analysis_text += f"Price is currently trading near current price of {formatted_price}, "
+            elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
+                # Format cryptocurrency price using the format_crypto function
+                def format_crypto(price):
+                    # Bitcoin and high-value coins (>1000) - format with commas for thousands
+                    if price > 1000:
+                        price_str = f"{price:.2f}"
+                        parts = price_str.split('.')
+                        # Format large numbers with commas (e.g., 68,000.00)
+                        formatted_integer = ""
+                        for i, char in enumerate(reversed(parts[0])):
+                            if i > 0 and i % 3 == 0:
+                                formatted_integer = "," + formatted_integer
+                            formatted_integer = char + formatted_integer
+                        return f"{formatted_integer}.{parts[1]}"
+                    # Medium value coins ($10-$999)
+                    elif price > 10:
+                        return f"{price:.2f}"
+                    # Low value coins ($0.10-$9.99)
+                    elif price > 0.1:
+                        return f"{price:.3f}"
+                    # Very low value coins (<$0.10)
+                    else:
+                        return f"{price:.5f}"
+                
+                formatted_price = format_crypto(current_price)
+                analysis_text += f"Price is currently trading near current price of {formatted_price}, "
             else:
                 analysis_text += f"Price is currently trading near current price of {current_price:.{precision}f}, "
-                
+            
             analysis_text += f"showing {'bullish' if trend == 'BUY' else 'bearish' if trend == 'SELL' else 'mixed'} momentum. "
             analysis_text += f"The pair remains {'above' if current_price > ema_50 else 'below'} key EMAs, "
             analysis_text += f"indicating a {'strong uptrend' if trend == 'BUY' else 'strong downtrend' if trend == 'SELL' else 'consolidation phase'}. "
@@ -1805,144 +1874,6 @@ class ChartService:
             logger.error(f"Error generating default analysis: {str(e)}")
             # Return a very basic message if all else fails
             return f"Analysis for {instrument} on {timeframe} timeframe is not available at this time. Please try again later."
-
-    async def get_sentiment_analysis(self, instrument: str) -> str:
-        """Generate sentiment analysis for an instrument"""
-        # This method is intentionally left empty to prevent duplicate sentiment analysis
-        # Sentiment analysis is now directly handled by the TelegramService using MarketSentimentService
-        logger.info(f"ChartService.get_sentiment_analysis called for {instrument} but is now disabled")
-        return ""
-
-    def _get_instrument_precision(self, instrument: str) -> int:
-        """Get the appropriate decimal precision for an instrument
-        
-        Args:
-            instrument: The trading instrument symbol
-            
-        Returns:
-            int: Number of decimal places to use
-        """
-        instrument = instrument.upper().replace("/", "")
-        
-        # JPY pairs use 3 decimal places
-        if instrument.endswith("JPY") or "JPY" in instrument:
-            return 3
-            
-        # Most forex pairs use 5 decimal places
-        if len(instrument) == 6 and all(c.isalpha() for c in instrument):
-            return 5
-            
-        # Crypto typically uses 2 decimal places for major coins, more for smaller ones
-        if any(crypto in instrument for crypto in ["BTC", "ETH", "LTC", "XRP"]):
-            return 2
-            
-        # Gold uses 3 decimal places
-        if instrument in ["XAUUSD", "GC=F"]:
-            return 3
-            
-        # Silver uses 4 decimal places
-        if instrument in ["XAGUSD", "SI=F"]:
-            return 4
-            
-        # Oil prices use 2 decimal places
-        if instrument in ["XTIUSD", "WTIUSD", "XBRUSD", "USOIL", "CL=F", "BZ=F"]:
-            return 2
-            
-        # Indices typically use 2 decimal places
-        if any(index in instrument for index in ["US30", "US500", "US100", "UK100", "DE40", "JP225"]):
-            return 2
-            
-        # Default to 4 decimal places as a safe value
-        return 4
-    
-    async def _detect_market_type(self, instrument: str) -> str:
-        """
-        Detect the market type of the instrument.
-        
-        Args:
-            instrument: The trading instrument
-            
-        Returns:
-            str: Market type ('forex', 'crypto', 'index', 'commodity')
-        """
-        # Normalize the instrument name
-        instrument = instrument.upper().replace("/", "")
-        
-        # Direct matches for common crypto symbols - extra controle voor directe detectie
-        direct_crypto_matches = [
-            "BTC", "ETH", "XRP", "LTC", "BCH", "ADA", "DOT", "LINK", 
-            "XLM", "DOGE", "BNB", "SOL", "AVAX", "MATIC"
-        ]
-        
-        if any(instrument.startswith(crypto) for crypto in direct_crypto_matches):
-            logger.info(f"Direct crypto match found for {instrument}")
-            return "crypto"
-            
-        # Check for crypto in the symbol
-        if "BTC" in instrument or "ETH" in instrument or "USDT" in instrument:
-            logger.info(f"Crypto detected by keyword in {instrument}")
-            return "crypto"
-        
-        # Common cryptocurrency identifiers
-        crypto_symbols = [
-            "BTC", "ETH", "XRP", "LTC", "BCH", "ADA", "DOT", "LINK", 
-            "XLM", "DOGE", "UNI", "AAVE", "SNX", "SUSHI", "YFI", 
-            "COMP", "MKR", "BAT", "ZRX", "REN", "KNC", "BNB", "SOL",
-            "AVAX", "MATIC", "ALGO", "ATOM", "FTM", "NEAR", "ONE",
-            "HBAR", "VET", "THETA", "FIL", "TRX", "EOS", "NEO",
-            "CAKE", "LUNA", "SHIB", "MANA", "SAND", "AXS", "CRV",
-            "ENJ", "CHZ", "GALA", "ROSE", "APE", "FTT", "GRT",
-            "GMT", "EGLD", "XTZ", "FLOW", "ICP", "XMR", "DASH"
-        ]
-        
-        # Check for crypto
-        if any(crypto in instrument for crypto in crypto_symbols) or instrument.endswith(("USDT", "BUSD", "USDC", "BTC", "ETH")):
-            return "crypto"
-        
-        # Common forex pairs
-        forex_pairs = [
-            "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", 
-            "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDNZD", "AUDCAD",
-            "AUDCHF", "AUDJPY", "CADCHF", "CADJPY", "CHFJPY", "EURAUD",
-            "EURCAD", "EURCHF", "EURNZD", "GBPAUD", "GBPCAD", "GBPCHF",
-            "GBPNZD", "NZDCAD", "NZDCHF", "NZDJPY"
-        ]
-        
-        # Check for forex
-        if instrument in forex_pairs or (
-                len(instrument) == 6 and 
-                instrument[:3] in ["EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CAD", "CHF"] and
-                instrument[3:] in ["EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CAD", "CHF"]
-            ):
-            return "forex"
-        
-        # Common commodities
-        commodities = [
-            "XAUUSD", "XAGUSD", "WTIUSD", "XTIUSD", "XBRUSD", "CLUSD",
-            "XPDUSD", "XPTUSD", "NATGAS", "COPPER", "BRENT", "USOIL"
-        ]
-        
-        # Check for commodities
-        if any(commodity in instrument for commodity in commodities) or instrument in commodities:
-            return "commodity"
-        
-        # Common indices
-        indices = [
-            "US30", "US500", "US100", "UK100", "DE40", "FR40", "JP225", 
-            "AU200", "ES35", "IT40", "HK50", "DJI", "SPX", "NDX", 
-            "FTSE", "DAX", "CAC", "NIKKEI", "ASX", "IBEX", "MIB", "HSI"
-        ]
-        
-        # Check for indices
-        if any(index in instrument for index in indices) or instrument in indices:
-            return "index"
-        
-        # Default to crypto for unknown instruments that could be new cryptocurrencies
-        if instrument.endswith(("USD", "USDT", "ETH", "BTC")) and len(instrument) > 3:
-            return "crypto"
-        
-        # Default to forex if all else fails
-        return "forex"
 
     async def _fetch_crypto_price(self, symbol: str) -> Optional[float]:
         """
