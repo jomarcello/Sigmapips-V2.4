@@ -31,6 +31,8 @@ class BinanceProvider:
     
     # Data API endpoint for market data only
     DATA_API_ENDPOINT = "https://data-api.binance.vision"
+    # Specific endpoint for SPOT Klines (less restricted)
+    SPOT_DATA_API_URL = "https://data.binance.com" 
     
     # Current active endpoint (start with the primary one)
     _active_endpoint_index = 0
@@ -70,8 +72,8 @@ class BinanceProvider:
         Returns:
             Optional[Dict]: Technical analysis data or None if failed
         """
-        # Use the dedicated data endpoint
-        data_endpoint_url = "https://data.binance.com" 
+        # Use the dedicated SPOT data endpoint URL defined at class level
+        data_endpoint_url = BinanceProvider.SPOT_DATA_API_URL 
         
         # Log original instrument before formatting
         logger.info(f"[Binance Data API] Getting market data for instrument: {instrument}")
@@ -94,7 +96,7 @@ class BinanceProvider:
             formatted_symbol = BinanceProvider._format_symbol(instrument)
             logger.info(f"[Binance Data API] Formatted symbol: {instrument} -> {formatted_symbol}")
             
-            logger.info(f"Fetching {formatted_symbol} data from Binance Data API: {data_endpoint_url}. API call #{BinanceProvider._api_call_count} this minute.")
+            logger.info(f"Fetching {formatted_symbol} data from Binance Spot Data API: {data_endpoint_url}. API call #{BinanceProvider._api_call_count} this minute.")
             
             # Map timeframe to Binance interval
             binance_interval = {
