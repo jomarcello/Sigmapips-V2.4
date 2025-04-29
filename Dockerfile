@@ -65,18 +65,44 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV DISPLAY=:99
 
+# Installeer Playwright-specifieke dependencies
+RUN apt-get update && apt-get install -y \
+    libwoff1 \
+    libopus0 \
+    libwebp6 \
+    libenchant1c2a \
+    libgudev-1.0-0 \
+    libsecret-1-0 \
+    libhyphen0 \
+    libvpx5 \
+    libevent-2.1-6 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Werkdirectory instellen
 WORKDIR /app
 
-# Kopieer alleen de dependency bestanden
+# Kopieer alleen requirements.txt
 COPY requirements.txt .
-COPY docker_setup.sh .
 
-# Maak het setup-script uitvoerbaar
-RUN chmod +x docker_setup.sh
+# Installeer benodigde systeem packages voor Python
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Draai het setup-script om alle dependencies te installeren
-RUN ./docker_setup.sh
+# Installeer yfinance expliciet
+RUN pip install yfinance==0.2.36
+
+# Installeer alle Python dependencies
+RUN pip install -r requirements.txt
+
+# Installeer Playwright voor Python en Node.js
+RUN pip install playwright && playwright install chromium
+RUN npm install playwright@latest && npx playwright install chromium
 
 # Kopieer de rest van de app
 COPY . .
