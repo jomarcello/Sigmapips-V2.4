@@ -673,8 +673,22 @@ class ChartService:
                 for provider in providers_to_try:
                     try:
                         logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
-                        # Gebruik de get_market_data methode van de provider
-                        market_data_result = await provider.get_market_data(instrument, timeframe)
+                        
+                        # Special handling for Binance with crypto symbols
+                        if market_type == "crypto" and provider.__class__.__name__ == "BinanceProvider":
+                            # Format the symbol for Binance (BTCUSD -> BTCUSDT)
+                            crypto_symbol = instrument
+                            if crypto_symbol.endswith("USD") and not crypto_symbol.endswith("USDT"):
+                                crypto_symbol = crypto_symbol.replace("USD", "USDT")
+                                logger.info(f"Formatted crypto symbol for Binance: {instrument} -> {crypto_symbol}")
+                            else:
+                                logger.info(f"Using original symbol for Binance: {crypto_symbol}")
+                                
+                            # Use the formatted symbol for Binance
+                            market_data_result = await provider.get_market_data(crypto_symbol, timeframe)
+                        else:
+                            # For other providers or non-crypto, use the original instrument
+                            market_data_result = await provider.get_market_data(instrument, timeframe)
                         
                         # Controleer het resultaat
                         if market_data_result is None:
