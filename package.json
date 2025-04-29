@@ -5,10 +5,12 @@
   "main": "index.js",
   "scripts": {
     "test": "playwright test",
-    "screenshot": "node tradingview_screenshot.js"
+    "screenshot": "node tradingview_screenshot.js",
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
     "@playwright/test": "^1.40.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "playwright": "^1.52.0"
   }
-} 
+}
