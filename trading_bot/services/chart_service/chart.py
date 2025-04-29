@@ -26,7 +26,7 @@ from trading_bot.services.chart_service.base import TradingViewService
 # Import providers
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
-from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
+# from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +59,11 @@ class ChartService:
             # Houd bij wanneer de laatste request naar Yahoo is gedaan
             self.last_yahoo_request = 0
             
-            # Initialiseer de chart providers
+            # Initialiseer de chart providers (ZONDER TradingViewNodeService)
             self.chart_providers = [
                 BinanceProvider(),      # Eerst Binance voor crypto's
                 YahooFinanceProvider(), # Dan Yahoo Finance voor andere markten
-                TradingViewNodeService(), # TradingView screenshot service
+                # TradingViewNodeService(), # VERWIJDERD
             ]
             
             # Initialiseer de chart links met de specifieke TradingView links
@@ -133,14 +133,14 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            # Initialize tradingview node service
-            self.tradingview_node = next((p for p in self.chart_providers if isinstance(p, TradingViewNodeService)), None)
-            if self.tradingview_node:
-                logging.info("TradingViewNodeService provider found")
-            else:
-                logging.warning("TradingViewNodeService provider not found in chart_providers")
+            # Initialize tradingview node service - VERWIJDERD
+            # self.tradingview_node = next((p for p in self.chart_providers if isinstance(p, TradingViewNodeService)), None)
+            # if self.tradingview_node:
+            #     logging.info("TradingViewNodeService provider found")
+            # else:
+            #     logging.warning("TradingViewNodeService provider not found in chart_providers")
             
-            logging.info("Chart service initialized with providers: Binance, YahooFinance, TradingViewNode")
+            logging.info("Chart service initialized with providers: Binance, YahooFinance") # UPDATED LOG
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
@@ -197,13 +197,14 @@ class ChartService:
         else:
             logger.warning(f"❌ No TradingView URL found for {instrument}")
 
-        # Probeer een chart te genereren met behulp van providers
-        logger.info(f"Attempting to generate chart with providers for {instrument}")
+        # Probeer een chart te genereren met behulp van resterende providers
+        logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
         for provider in self.chart_providers:
             try:
-                if 'tradingview' in provider.__class__.__name__.lower():
-                    # Skip TradingView provider because we already tried it above
-                    continue
+                # REMOVED check for tradingview provider as it's no longer in the list
+                # if 'tradingview' in provider.__class__.__name__.lower():
+                #     # Skip TradingView provider because we already tried it above
+                #     continue
                     
                 logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                 chart_data = await provider.get_chart(instrument, timeframe)
@@ -303,20 +304,6 @@ class ChartService:
                 logger.info("Matplotlib is available for chart generation")
             except ImportError:
                 logger.error("Matplotlib is not available, chart service may not function properly")
-            
-            # Initialize the TradingViewNodeService provider if available
-            for provider in self.chart_providers:
-                if isinstance(provider, TradingViewNodeService):
-                    logger.info("Initializing TradingViewNodeService provider")
-                    try:
-                        init_result = await provider.initialize()
-                        if init_result:
-                            logger.info("TradingViewNodeService provider initialized successfully")
-                        else:
-                            logger.warning("TradingViewNodeService provider initialization returned False")
-                    except Exception as e:
-                        logger.error(f"Error initializing TradingViewNodeService provider: {str(e)}")
-                        logger.error(traceback.format_exc())
             
             # Initialize technical analysis cache
             self.analysis_cache = {}
