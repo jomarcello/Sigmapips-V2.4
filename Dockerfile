@@ -66,16 +66,20 @@ ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV DISPLAY=:99
 
 # Installeer Playwright-specifieke dependencies
+# Bijgewerkte versies voor Debian Bookworm
 RUN apt-get update && apt-get install -y \
-    libwoff1 \
+    fonts-noto-color-emoji \
     libopus0 \
-    libwebp6 \
-    libenchant1c2a \
+    libwebp7 \
+    libenchant-2-2 \
     libgudev-1.0-0 \
     libsecret-1-0 \
     libhyphen0 \
-    libvpx5 \
-    libevent-2.1-6 \
+    libvpx7 \
+    libevent-2.1-7 \
+    ffmpeg \
+    libwoff1 \
+    libharfbuzz-icu0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Werkdirectory instellen
