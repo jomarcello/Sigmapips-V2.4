@@ -514,9 +514,9 @@ class ChartService:
             # EXTRA DEBUG: Check if we can import playwright
             try:
                 import playwright
-                logger.info(f"Playwright module imported successfully, version: {getattr(playwright, '__version__', 'unknown')}")
+                logger.info(f"✅ Playwright module imported successfully, version: {getattr(playwright, '__version__', 'unknown')}")
                 from playwright.async_api import async_playwright
-                logger.info("Playwright async_api successfully imported")
+                logger.info("✅ Playwright async_api successfully imported")
             except ImportError as import_e:
                 logger.error(f"Failed to import playwright: {str(import_e)}. Screenshot will fail.")
                 logger.error(f"Exception details: {traceback.format_exc()}")
@@ -527,23 +527,26 @@ class ChartService:
                 return None
                 
             # Launch playwright
-            logger.info(f"Launching async_playwright for {instrument}")
+            logger.info(f"🚀 Launching async_playwright for {instrument}...") # ADDED LOG
             async with async_playwright() as p:
+                logger.info(f"✅ Async_playwright launched for {instrument}") # ADDED LOG
                 try:
                     # Launch browser with specific options
-                    logger.info(f"Launching browser for {instrument}")
+                    logger.info(f"🖥️ Launching browser for {instrument}...") # ADDED LOG
                     browser = await p.chromium.launch(headless=True)
+                    logger.info(f"✅ Browser launched successfully for {instrument}") # ADDED LOG
                 except Exception as browser_e:
-                    logger.error(f"Failed to launch browser for {instrument}: {str(browser_e)}")
+                    logger.error(f"❌ Failed to launch browser for {instrument}: {str(browser_e)}")
                     logger.error(f"Exception details: {traceback.format_exc()}")
                     return None
 
                 try:
                     # Create a new page with larger viewport
-                    logger.info(f"Creating browser page for {instrument}")
+                    logger.info(f"📄 Creating browser context for {instrument}...") # ADDED LOG
                     context = await browser.new_context(
                         viewport={"width": 1920, "height": 1080}
                     )
+                    logger.info(f"✅ Browser context created for {instrument}") # ADDED LOG
                     
                     # EXPLICIET DE SESSION ID COOKIE TOEVOEGEN - MEERDERE COOKIE FORMATS
                     import os
@@ -559,6 +562,7 @@ class ChartService:
                     logger.info(f"Session ID cookie length: {len(session_id)} characters")
                     
                     # Add multiple cookie formats to ensure compatibility
+                    logger.info(f"🍪 Adding cookies for {instrument}...") # ADDED LOG
                     await context.add_cookies([
                         # Traditional sessionid cookie
                         {
@@ -587,54 +591,58 @@ class ChartService:
                             "secure": True
                         }
                     ])
+                    logger.info(f"✅ Cookies added for {instrument}") # ADDED LOG
                     
+                    logger.info(f"📄 Creating new page for {instrument}...") # ADDED LOG
                     page = await context.new_page()
+                    logger.info(f"✅ New page created for {instrument}") # ADDED LOG
                 except Exception as page_e:
-                    logger.error(f"Failed to create page for {instrument}: {str(page_e)}")
+                    logger.error(f"❌ Failed to create page/context or add cookies for {instrument}: {str(page_e)}") # UPDATED LOG
                     await browser.close()
                     return None
 
                 try:
                     # Increase navigation timeout and wait until page load event (less strict than networkidle)
-                    logger.info(f"Navigating to URL for {instrument}: {url}")
+                    logger.info(f"➡️ Navigating to URL for {instrument}: {url}") # ADDED LOG
                     await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
-                    logger.info(f"Page loaded (load event): {url}")
+                    logger.info(f"✅ Page loaded (load event) for {instrument}: {url}") # ADDED LOG
                     
                     # Wacht EXPLICIET op de chart elementen
-                    logger.info(f"Waiting for chart to be fully rendered...")
+                    logger.info(f"⏳ Waiting for chart elements for {instrument}...") # ADDED LOG
                     try:
                         # Wacht tot de chart container aanwezig is
+                        logger.info(f"⏳ Waiting for .chart-container selector...") # ADDED LOG
                         await page.wait_for_selector('.chart-container', timeout=20000)
-                        logger.info(f"Chart container found on page")
+                        logger.info(f"✅ Chart container found on page")
                         
                         # Wacht tot de prijs-labels zichtbaar zijn (indicatie dat chart echt is geladen)
+                        logger.info(f"⏳ Waiting for .price-axis selector...") # ADDED LOG
                         await page.wait_for_selector('.price-axis', timeout=5000)
-                        logger.info(f"Price axis labels found - chart rendering complete")
+                        logger.info(f"✅ Price axis labels found - chart rendering potentially complete") # UPDATED LOG
                         
                     except Exception as wait_e:
-                        logger.warning(f"Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
+                        logger.warning(f"⚠️ Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
                     
                     # Simulate Shift+F for fullscreen mode
-                    logger.info(f"Simulating Shift+F for fullscreen...")
+                    logger.info(f"⌨️ Simulating Shift+F for fullscreen...") # ADDED LOG
                     await page.keyboard.press("Shift+F")
-                    
-                    # # Wait a bit after Shift+F to allow the UI to adjust
-                    # logger.info(f"Waiting after Shift+F.") # REMOVED FIXED WAIT
-                    # await page.wait_for_timeout(3000) # REMOVED FIXED WAIT
-                    
+                    logger.info(f"✅ Shift+F simulated") # ADDED LOG
+                                        
                     # Take screenshot
-                    logger.info(f"Taking full page screenshot...")
+                    logger.info(f"📸 Taking full page screenshot for {instrument}...") # ADDED LOG
                     screenshot_bytes = await page.screenshot(full_page=True, type='jpeg', quality=90)
-                    logger.info(f"Successfully captured full page screenshot for {instrument}")
+                    screenshot_size_kb = len(screenshot_bytes) / 1024 if screenshot_bytes else 0
+                    logger.info(f"✅ Screenshot captured for {instrument} (Size: {screenshot_size_kb:.2f} KB)") # ADDED LOG & SIZE
                     
                     # Close the browser explicitly
+                    logger.info(f"🔒 Closing browser for {instrument}...") # ADDED LOG
                     await browser.close()
-                    logger.info(f"Browser closed successfully for {instrument}")
+                    logger.info(f"✅ Browser closed successfully for {instrument}") # ADDED LOG
                     
                 except Exception as navigation_e:
-                    logger.error(f"Failed during navigation/screenshot for {instrument}: {str(navigation_e)}")
+                    logger.error(f"❌ Failed during navigation/wait/screenshot for {instrument}: {str(navigation_e)}") # UPDATED LOG
                     logger.error(f"Exception details: {traceback.format_exc()}")
-                    await browser.close()
+                    await browser.close() # Ensure browser is closed on error
                     return None
         except Exception as e:
             # Capture and log the full traceback for any errors
@@ -643,12 +651,15 @@ class ChartService:
             return None
         
         # Controleer of de screenshot wel daadwerkelijk een afbeelding is
-        if screenshot_bytes and len(screenshot_bytes) > 1000:
+        # LOG ADDED: Log size before final check
+        final_screenshot_size_kb = len(screenshot_bytes) / 1024 if screenshot_bytes else 0
+        logger.info(f"ℹ️ Final check of screenshot size: {final_screenshot_size_kb:.2f} KB (Threshold: > 1 KB)")
+        if screenshot_bytes and len(screenshot_bytes) > 1000: # Threshold is 1000 bytes (~1KB)
             end_time = time.time()
-            logger.info(f"Screenshot capture completed in {end_time - start_time:.2f} seconds with result: Success")
+            logger.info(f"✅ Screenshot capture completed successfully in {end_time - start_time:.2f} seconds.") # UPDATED LOG
             return screenshot_bytes
         else:
-            logger.error(f"Screenshot capture failed: {'Empty bytes' if screenshot_bytes else 'No bytes returned'}")
+            logger.error(f"❌ Screenshot capture failed final check: {'Empty bytes' if not screenshot_bytes else f'Size {final_screenshot_size_kb:.2f} KB too small'}")
             return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
