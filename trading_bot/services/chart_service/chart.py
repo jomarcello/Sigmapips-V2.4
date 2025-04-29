@@ -638,7 +638,7 @@ class ChartService:
         except Exception as e:
             logger.error(f"Error in initial setup for technical analysis: {str(e)}")
             return await self._generate_default_analysis(instrument, timeframe)
-            
+        
         try:
             # Get the available data providers
             binance_provider = None
@@ -650,7 +650,11 @@ class ChartService:
                 binance_provider = BinanceProvider()
             except Exception as e:
                 logger.error(f"Failed to load BinanceProvider: {str(e)}")
-                
+        except Exception as e:
+            logger.error(f"Error in provider setup for technical analysis: {str(e)}")
+            return await self._generate_default_analysis(instrument, timeframe)
+
+        try:
             try:
                 if not is_crypto:  # Alleen Yahoo laden als het geen crypto is
                     from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
@@ -1010,26 +1014,22 @@ class ChartService:
                     elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
                         # Format cryptocurrency price using the format_crypto function
                         def format_crypto(price):
-                            # Bitcoin and high-value coins (>1000) - format with commas for thousands
-                            if price > 1000:
+                            # Bitcoin and high-value coins (>10000) - format with whole numbers
+                            if price > 10000:
+                                price_str = f"{int(price):,}"
+                                return price_str
+                            # Medium value coins (100-9999) - format with 1 decimal place
+                            elif price >= 100:
+                                price_str = f"{price:.1f}"
+                                parts = price_str.split('.')
+                                formatted_integer = f"{int(parts[0]):,}"
+                                return f"{formatted_integer}.{parts[1]}"
+                            # Lower value coins (<100) - format with 2 decimal places
+                            else:
                                 price_str = f"{price:.2f}"
                                 parts = price_str.split('.')
-                                # Format large numbers with commas (e.g., 68,000.00)
-                                formatted_integer = ""
-                                for i, char in enumerate(reversed(parts[0])):
-                                    if i > 0 and i % 3 == 0:
-                                        formatted_integer = "," + formatted_integer
-                                    formatted_integer = char + formatted_integer
+                                formatted_integer = f"{int(parts[0]):,}"
                                 return f"{formatted_integer}.{parts[1]}"
-                            # Medium value coins ($10-$999)
-                            elif price > 10:
-                                return f"{price:.2f}"
-                            # Low value coins ($0.10-$9.99)
-                            elif price > 0.1:
-                                return f"{price:.3f}"
-                            # Very low value coins (<$0.10)
-                            else:
-                                return f"{price:.5f}"
                         
                         formatted_price = format_crypto(current_price)
                         analysis_text += f"Price is currently trading near current price of {formatted_price}, "
@@ -1097,26 +1097,22 @@ class ChartService:
                     elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
                         # Format cryptocurrency prices based on their value
                         def format_crypto(price):
-                            # Bitcoin and high-value coins (>1000) - format with commas for thousands
-                            if price > 1000:
+                            # Bitcoin and high-value coins (>10000) - format with whole numbers
+                            if price > 10000:
+                                price_str = f"{int(price):,}"
+                                return price_str
+                            # Medium value coins (100-9999) - format with 1 decimal place
+                            elif price >= 100:
+                                price_str = f"{price:.1f}"
+                                parts = price_str.split('.')
+                                formatted_integer = f"{int(parts[0]):,}"
+                                return f"{formatted_integer}.{parts[1]}"
+                            # Lower value coins (<100) - format with 2 decimal places
+                            else:
                                 price_str = f"{price:.2f}"
                                 parts = price_str.split('.')
-                                # Format large numbers with commas (e.g., 68,000.00)
-                                formatted_integer = ""
-                                for i, char in enumerate(reversed(parts[0])):
-                                    if i > 0 and i % 3 == 0:
-                                        formatted_integer = "," + formatted_integer
-                                    formatted_integer = char + formatted_integer
+                                formatted_integer = f"{int(parts[0]):,}"
                                 return f"{formatted_integer}.{parts[1]}"
-                            # Medium value coins ($10-$999)
-                            elif price > 10:
-                                return f"{price:.2f}"
-                            # Low value coins ($0.10-$9.99)
-                            elif price > 0.1:
-                                return f"{price:.3f}"
-                            # Very low value coins (<$0.10)
-                            else:
-                                return f"{price:.5f}"
 
                         analysis_text += f"Daily High:   {format_crypto(daily_high)}\n"
                         analysis_text += f"Daily Low:    {format_crypto(daily_low)}\n"
@@ -1563,26 +1559,22 @@ class ChartService:
             elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
                 # Format cryptocurrency price using the format_crypto function
                 def format_crypto(price):
-                    # Bitcoin and high-value coins (>1000) - format with commas for thousands
-                    if price > 1000:
+                    # Bitcoin and high-value coins (>10000) - format with whole numbers
+                    if price > 10000:
+                        price_str = f"{int(price):,}"
+                        return price_str
+                    # Medium value coins (100-9999) - format with 1 decimal place
+                    elif price >= 100:
+                        price_str = f"{price:.1f}"
+                        parts = price_str.split('.')
+                        formatted_integer = f"{int(parts[0]):,}"
+                        return f"{formatted_integer}.{parts[1]}"
+                    # Lower value coins (<100) - format with 2 decimal places
+                    else:
                         price_str = f"{price:.2f}"
                         parts = price_str.split('.')
-                        # Format large numbers with commas (e.g., 68,000.00)
-                        formatted_integer = ""
-                        for i, char in enumerate(reversed(parts[0])):
-                            if i > 0 and i % 3 == 0:
-                                formatted_integer = "," + formatted_integer
-                            formatted_integer = char + formatted_integer
+                        formatted_integer = f"{int(parts[0]):,}"
                         return f"{formatted_integer}.{parts[1]}"
-                    # Medium value coins ($10-$999)
-                    elif price > 10:
-                        return f"{price:.2f}"
-                    # Low value coins ($0.10-$9.99)
-                    elif price > 0.1:
-                        return f"{price:.3f}"
-                    # Very low value coins (<$0.10)
-                    else:
-                        return f"{price:.5f}"
                 
                 formatted_price = format_crypto(current_price)
                 analysis_text += f"Price is currently trading near current price of {formatted_price}, "
