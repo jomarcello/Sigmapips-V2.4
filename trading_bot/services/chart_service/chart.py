@@ -148,7 +148,7 @@ class ChartService:
     async def get_chart(self, instrument: str, timeframe: str = "1h", fullscreen: bool = False) -> bytes:
         """Get a chart for a specific instrument and timeframe."""
         start_time = time.time()
-        logger.info(f"Getting chart for {instrument} with timeframe {timeframe}")
+        logger.info(f"🔍 [CHART FLOW START] Getting chart for {instrument} with timeframe {timeframe}")
         
         # Controleer of de service is geïnitialiseerd
         if not hasattr(self, 'chart_providers') or not self.chart_providers:
@@ -161,20 +161,40 @@ class ChartService:
         logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
 
         # Controleer of we een TradingView URL hebben voor dit instrument
+        logger.info(f"⚠️ Getting TradingView URL for {instrument}...")
         tradingview_url = self.get_tradingview_url(instrument, timeframe)
         if tradingview_url:
-            logger.info(f"Found TradingView URL for {instrument}: {tradingview_url}")
+            logger.info(f"✅ Found TradingView URL for {instrument}: {tradingview_url}")
+            
+            # EXTRA DEBUG: Print URL components
+            url_parts = tradingview_url.split('?')
+            if len(url_parts) > 1:
+                base_url = url_parts[0]
+                params = url_parts[1].split('&') if len(url_parts) > 1 else []
+                logger.info(f"🔍 URL Base: {base_url}")
+                logger.info(f"🔍 URL Params: {params}")
+                
+                # Verify session param exists
+                has_session = any(p.startswith('session=') for p in params)
+                logger.info(f"🔍 Has session param: {has_session}")
+                
+                if not has_session:
+                    logger.warning(f"❌ URL is missing session parameter! This may cause authentication issues.")
             
             # Direct call the internal Playwright method if URL exists
-            logger.info(f"Attempting TradingView screenshot via Playwright for {instrument}")
+            logger.info(f"🖥️ Attempting TradingView screenshot via Playwright for {instrument}")
             screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
             if screenshot:
-                logger.info(f"Successfully captured tradingview screenshot for {instrument}")
+                # Add explicit size check
+                size_kb = len(screenshot) / 1024
+                logger.info(f"✅ Successfully captured tradingview screenshot for {instrument} (Size: {size_kb:.2f} KB)")
+                if size_kb < 5:
+                    logger.warning(f"⚠️ Screenshot is suspiciously small ({size_kb:.2f} KB). This may indicate a blank or error page.")
                 return screenshot
             else:
-                logger.error(f"Failed to capture tradingview screenshot for {instrument}")
+                logger.error(f"❌ Failed to capture tradingview screenshot for {instrument}")
         else:
-            logger.warning(f"No TradingView URL found for {instrument}")
+            logger.warning(f"❌ No TradingView URL found for {instrument}")
 
         # Probeer een chart te genereren met behulp van providers
         logger.info(f"Attempting to generate chart with providers for {instrument}")
@@ -443,6 +463,46 @@ class ChartService:
         try:
             logger.info(f"******** CAPTURE TRADINGVIEW SCREENSHOT AANGEROEPEN voor {instrument} van {url} ********")
             logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
+            
+            # ENSURE URL CONTAINS SESSION ID
+            import os
+            session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
+            # Check if session ID is properly set
+            if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
+                logger.warning(f"⚠️ Using DEFAULT session ID in URL - environment variable not set properly!")
+            else:
+                logger.info(f"✓ Using custom session ID in URL: {session_id[:5]}...")
+            
+            # Parse URL components
+            url_parts = url.split('?')
+            base_url = url_parts[0]
+            params = {}
+            
+            # Parse existing parameters
+            if len(url_parts) > 1:
+                query_string = url_parts[1]
+                for param in query_string.split('&'):
+                    if '=' in param:
+                        key, value = param.split('=', 1)
+                        params[key] = value
+            
+            # Add essential parameters if missing
+            if 'session' not in params:
+                params['session'] = session_id
+                logger.info(f"📝 Added session ID to URL params")
+                
+            # Ensure the symbol parameter is set if not already present
+            if 'symbol' not in params and instrument:
+                # Format the symbol based on the instrument type
+                symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
+                params['symbol'] = symbol
+                logger.info(f"📝 Added symbol {symbol} to URL params")
+            
+            # Rebuild the URL with all params
+            query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            url = f"{base_url}?{query_string}"
+            
+            logger.info(f"📝 Final URL with all parameters: {url}")
             
             # EXTRA DEBUG: Check if we can import playwright
             try:
