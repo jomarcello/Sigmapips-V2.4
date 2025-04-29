@@ -3135,23 +3135,34 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                 from trading_bot.services.chart_service.chart import ChartService
                 self.chart_service = ChartService()
             
-            # Get the chart image
-            chart_image = await self.chart_service.get_chart(instrument, timeframe)
-            
-            if not chart_image:
-                # Fallback to error message
-                error_text = f"Failed to generate chart for {instrument}. Please try again later."
-                await query.edit_message_text(
-                    text=error_text,
-                    reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
-                )
-                return MENU
-            
-            # Get technical analysis text
+            # THIS IS THE FIX: Get both chart image and technical analysis text together to avoid duplicate processing
+            # The get_chart method will handle authentication, login and screenshot correctly
+            # Log that we're getting the chart image specifically using TradingView screenshot
+            logger.info(f"🖥️ Getting TradingView chart image FIRST for {instrument}...")
+            try:
+                # Get the chart image - try to use TradingView explicitly
+                chart_image = await self.chart_service.get_chart(instrument, timeframe)
+                if chart_image:
+                    logger.info(f"✅ Successfully got TradingView chart image for {instrument}")
+                else:
+                    logger.warning(f"❌ Failed to get TradingView chart, will use yahoo data")
+                    chart_image = b'' # Empty bytes as fallback
+            except Exception as chart_error:
+                logger.error(f"Error getting chart: {str(chart_error)}")
+                chart_image = b''
+                    
+            # Now get technical analysis - this will use just the data, no screenshot
+            logger.info(f"Getting technical analysis TEXT for {instrument}...")
             technical_analysis = await self.chart_service.get_technical_analysis(instrument, timeframe)
             
+            if not chart_image or len(chart_image) < 1000:
+                # If no chart image was generated, create a basic one with matplotlib
+                logger.warning(f"Chart image was empty or too small, using fallback chart for {instrument}")
+                chart_image = self.chart_service.get_fallback_chart(instrument)
+                
             # Prepare caption with technical analysis
             caption = technical_analysis
+            
             
             # Telegram has a caption limit of 1024 characters
             # Shorten the disclaimer to save space
