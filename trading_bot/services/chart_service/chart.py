@@ -154,22 +154,67 @@ class ChartService:
             
             # 1. Zoek de TradingView URL op
             chart_url = self.chart_links.get(normalized_instrument)
+            
+            # EXTRA LOGGING
+            if chart_url:
+                logger.info(f"TRADINGVIEW URL GEVONDEN: {chart_url} voor instrument {normalized_instrument}")
+            else:
+                logger.info(f"GEEN TRADINGVIEW URL GEVONDEN voor instrument {normalized_instrument}")
+                
             logger.info(f"Chart URL lookup result for {normalized_instrument}: {'Found URL' if chart_url else 'No URL found'}")
 
             if chart_url:
-                # 2. Probeer TradingView screenshot te maken
-                logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
-                
-                # EXTRA DEBUG: Log before capturing tradingview screenshot
-                logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
+                # DIRECTE AANROEP VAN TRADINGVIEWNODESERVICE
                 try:
+                    from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
+                    
+                    logger.info("********** USING DIRECT TRADINGVIEWNODESERVICE INSTEAD **********")
+                    node_service = TradingViewNodeService()
+                    
+                    # Initialiseer de service
+                    init_result = await node_service.initialize()
+                    logger.info(f"TradingViewNodeService initialized: {init_result}")
+                    
+                    # Neem screenshot
                     screenshot_start = time.time()
-                    chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+                    chart_image = await node_service.take_screenshot_of_url(chart_url, fullscreen)
                     screenshot_end = time.time()
-                    logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
-                except Exception as screen_e:
-                    logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
-                    chart_image = None
+                    
+                    logger.info(f"TradingViewNodeService screenshot completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
+                    
+                    # Als dat mislukt, val terug op de interne methode
+                    if not chart_image:
+                        logger.warning("TradingViewNodeService failed, falling back to internal method")
+                        
+                        # 2. Probeer TradingView screenshot te maken via interne methode
+                        logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
+                        
+                        # EXTRA DEBUG: Log before capturing tradingview screenshot
+                        logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
+                        try:
+                            screenshot_start = time.time()
+                            chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+                            screenshot_end = time.time()
+                            logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
+                        except Exception as screen_e:
+                            logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
+                            chart_image = None
+                except Exception as direct_e:
+                    logger.error(f"Error with direct TradingViewNodeService: {str(direct_e)}", exc_info=True)
+                    
+                    # Fallback naar normale methode
+                    logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
+                    
+                    # EXTRA DEBUG: Log before capturing tradingview screenshot
+                    logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
+                    try:
+                        screenshot_start = time.time()
+                        chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+                        screenshot_end = time.time()
+                        logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
+                    except Exception as screen_e:
+                        logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
+                        chart_image = None
             else:
                 logger.warning(f"No TradingView URL found for instrument: {normalized_instrument}")
 
@@ -395,6 +440,7 @@ class ChartService:
     async def _capture_tradingview_screenshot(self, url: str, instrument: str) -> Optional[bytes]:
         """Capture screenshot of TradingView chart using Playwright"""
         try:
+            logger.info(f"******** CAPTURE TRADINGVIEW SCREENSHOT AANGEROEPEN voor {instrument} van {url} ********")
             logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
             
             # EXTRA DEBUG: Check if we can import playwright
