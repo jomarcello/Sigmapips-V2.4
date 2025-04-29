@@ -895,11 +895,8 @@ class ChartService:
                     precision = self._get_instrument_precision(instrument)
                     
                     # Format the analysis using the same format as the main method
-                    if timeframe == "1d":
-                        # Daily analysis with more data
-                        analysis_text = f"{instrument} - Daily Analysis\n\n"
-                    else:
-                        analysis_text = f"{instrument} - {timeframe}\n\n"
+                    # Verwijder timeframe en maak instrument bold
+                    analysis_text = f"<b>{instrument}</b> Analysis\n\n"
                     
                     analysis_text += f"<b>Zone Strength:</b> {'★' * min(5, max(1, int(rsi/20)))}\n\n"
                     
@@ -1402,11 +1399,8 @@ class ChartService:
                 ema_200 = current_price * (1 + random.uniform(-0.02, 0.02))
             
             # Format the analysis using the same format as the main method
-            if timeframe == "1d":
-                # Daily analysis with more data
-                analysis_text = f"{instrument} - Daily Analysis\n\n"
-            else:
-                analysis_text = f"{instrument} - {timeframe}\n\n"
+            # Verwijder timeframe en maak instrument bold
+            analysis_text = f"<b>{instrument}</b> Analysis\n\n"
             
             analysis_text += f"<b>Zone Strength:</b> {zone_stars}\n\n"
             
