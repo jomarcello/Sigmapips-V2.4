@@ -653,20 +653,37 @@ class ChartService:
                 binance_provider = BinanceProvider()
             except Exception as e:
                 logger.error(f"Failed to load BinanceProvider: {str(e)}")
+                
+            # Alleen Yahoo Provider laden als het GEEN crypto is
+            if not is_crypto:
+                try:
+                    from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
+                    yahoo_provider = YahooFinanceProvider()
+                    logger.info(f"Loaded YahooFinanceProvider for non-crypto instrument: {instrument}")
+                except Exception as e:
+                    logger.error(f"Failed to load YahooFinanceProvider: {str(e)}")
+            else:
+                logger.info(f"Skipped loading YahooFinanceProvider for crypto instrument: {instrument}")
+                
+            try:
+                from trading_bot.services.chart_service.alltick_provider import AllTickProvider
+                alltick_provider = AllTickProvider()
+            except Exception as e:
+                logger.error(f"Failed to load AllTickProvider: {str(e)}")
         except Exception as e:
             logger.error(f"Error in provider setup for technical analysis: {str(e)}")
             return await self._generate_default_analysis(instrument, timeframe)
 
         # Main provider initialization block
         try:
-            # First try to load YahooFinance
+            # Extra controle: Yahoo Finance alleen voor niet-crypto
             try:
-                if not is_crypto:  # Alleen Yahoo laden als het geen crypto is
-                    # Get data from yahoo finance
-                    # Code to fetch from Yahoo Finance
-                    pass
+                if not is_crypto and yahoo_provider:
+                    logger.info(f"Yahoo Finance provider is available for non-crypto instrument: {instrument}")
+                elif is_crypto:
+                    logger.info(f"Yahoo Finance provider is intentionally skipped for crypto: {instrument}")
             except Exception as e:
-                logger.error(f"Error loading Yahoo Finance: {str(e)}")
+                logger.error(f"Error in Yahoo Finance availability check: {str(e)}")
                 
             # Initialization completed successfully
         except Exception as e:
@@ -681,10 +698,8 @@ class ChartService:
             if binance_provider:
                 providers_to_try.append(binance_provider)
                 logger.info(f"Added Binance provider for crypto {instrument}")
-            # Always add AllTick as backup for crypto
-            if alltick_provider:
-                providers_to_try.append(alltick_provider)
-                logger.info(f"Added AllTick provider as backup for crypto {instrument}")
+            # GEEN andere providers voor crypto
+            logger.info(f"Yahoo Finance and AllTick are intentionally excluded for crypto instrument: {instrument}")
         elif market_type == "commodity":
             logger.info(f"Using Yahoo Finance for commodity {instrument}")
             if yahoo_provider:
@@ -816,14 +831,14 @@ class ChartService:
         
         # Special handling for crypto if all providers failed
         elif successful_provider is None and market_type == "crypto":
-            logger.info(f"All providers failed for crypto {instrument}, using direct crypto API methods")
+            logger.info(f"Binance API failed for crypto {instrument}, using default values")
             try:
                 # Get price from our specialized crypto method
                 symbol_base = instrument.replace("USD", "").replace("USDT", "")
                 current_price = await self._fetch_crypto_price(symbol_base)
                 
                 if current_price:
-                    logger.info(f"Got crypto price {current_price} for {instrument} using fallback APIs")
+                    logger.info(f"Got crypto price {current_price} for {instrument} using default values")
                     
                     # Create a basic dataset with the current price and some reasonable indicators
                     base_price = current_price
@@ -2205,7 +2220,8 @@ class ChartService:
 
     async def _fetch_crypto_price(self, symbol: str) -> Optional[float]:
         """
-        Fetch crypto price from Binance API with fallback to other providers.
+        Fetch crypto price ONLY from Binance API.
+        NEVER uses Yahoo Finance or AllTick for cryptocurrencies.
         
         Args:
             symbol: The crypto symbol without USD (e.g., BTC)
@@ -2230,58 +2246,8 @@ class ChartService:
             
             logger.warning(f"Failed to get crypto price for {symbol} from Binance API")
             
-            # If Binance fails, try other providers
-            yahoo_provider = None
-            alltick_provider = None
-            
-            try:
-                from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
-                yahoo_provider = YahooFinanceProvider()
-            except Exception as e:
-                logger.error(f"Failed to load YahooFinanceProvider: {str(e)}")
-            
-            try:
-                from trading_bot.services.chart_service.alltick_provider import AllTickProvider
-                alltick_provider = AllTickProvider()
-            except Exception as e:
-                logger.error(f"Failed to load AllTickProvider: {str(e)}")
-            
-            if yahoo_provider:
-                logger.info(f"Trying Yahoo Finance for {symbol}")
-                yahoo_result = await yahoo_provider.get_market_data(symbol, "1h")
-                
-                # Handle different return types from Yahoo properly
-                if yahoo_result is not None:
-                    if hasattr(yahoo_result, 'indicators') and 'close' in yahoo_result.indicators:
-                        # This is a named tuple with indicators
-                        yahoo_price = yahoo_result.indicators['close']
-                        logger.info(f"Got crypto price {yahoo_price} for {symbol} from Yahoo Finance")
-                        return yahoo_price
-                    elif isinstance(yahoo_result, pd.DataFrame) and not yahoo_result.empty:
-                        # If it's a DataFrame, extract the last close price
-                        if 'Close' in yahoo_result.columns:
-                            yahoo_price = yahoo_result['Close'].iloc[-1]
-                            logger.info(f"Got crypto price {yahoo_price} for {symbol} from Yahoo Finance DataFrame")
-                            return float(yahoo_price)
-            
-            if alltick_provider:
-                logger.info(f"Trying AllTick for {symbol}")
-                alltick_result = await alltick_provider.get_market_data(symbol, "1h")
-                
-                # Handle different return types from AllTick properly
-                if alltick_result is not None:
-                    if hasattr(alltick_result, 'indicators') and 'close' in alltick_result.indicators:
-                        alltick_price = alltick_result.indicators['close']
-                        logger.info(f"Got crypto price {alltick_price} for {symbol} from AllTick")
-                        return alltick_price
-                    elif isinstance(alltick_result, pd.DataFrame) and not alltick_result.empty:
-                        if 'Close' in alltick_result.columns:
-                            alltick_price = alltick_result['Close'].iloc[-1]
-                            logger.info(f"Got crypto price {alltick_price} for {symbol} from AllTick DataFrame")
-                            return float(alltick_price)
-            
-            # If we still don't have a price, use default values for common cryptocurrencies
-            logger.warning(f"All providers failed for {symbol}, using default values")
+            # Als Binance faalt, GEEN andere providers proberen en direct default waarden gebruiken
+            logger.warning(f"Binance API failed for {symbol}, using default values")
             
             # Default values for common cryptocurrencies (updated values)
             crypto_defaults = {
