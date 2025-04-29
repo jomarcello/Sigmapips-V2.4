@@ -1963,9 +1963,11 @@ class ChartService:
 
     def get_tradingview_url(self, instrument: str, timeframe: str = '1h') -> str:
         """Get the TradingView chart URL for a specific instrument."""
+        session_id = None # Initialize session_id
         try:
-            # Get environment session ID for authentication
-            session_id = os.environ.get('TRADINGVIEW_SESSION_ID', 'tvs_xxxxxxxxxxxxxx')
+            # Get environment session ID for authentication - standardized default
+            session_id = os.getenv('TRADINGVIEW_SESSION_ID', 'z90l85p2anlgdwfppsrdnnfantz48z1o')
+            logger.info(f"Using TradingView Session ID: {session_id[:5]}...")
             
             # Main chart URL for EURUSD (full featured)
             if instrument == 'EURUSD':
@@ -1974,10 +1976,16 @@ class ChartService:
                 return url
                 
             # Use layout ID from config for other instruments
-            layout_id = self.config.get('tradingview_layout_id', 'xknpxpcr')
+            # Check if self.config exists and has the key
+            layout_id = 'xknpxpcr' # Default layout ID
+            if hasattr(self, 'config') and isinstance(self.config, dict):
+                layout_id = self.config.get('tradingview_layout_id', 'xknpxpcr')
+                logger.info(f"Using layout ID from config: {layout_id}")
+            else:
+                logger.warning("self.config not found or not a dict, using default layout ID 'xknpxpcr'")
             
             # Format the symbol based on the instrument type
-            symbol = f"FX:{instrument}" if len(instrument) == 6 else instrument
+            symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
             
             # Construct the URL with session ID for better authentication
             url = f"https://www.tradingview.com/chart/{layout_id}/?symbol={symbol}&timeframe={timeframe}&session={session_id}"
@@ -1985,8 +1993,15 @@ class ChartService:
             return url
         except Exception as e:
             logger.error(f"Error getting TradingView URL for {instrument}: {str(e)}")
-            # Fallback URL without session
-            return f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
+            logger.error(traceback.format_exc()) # Log full traceback
+            # Fallback URL - still try to add session if available
+            fallback_url = f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
+            if session_id:
+                fallback_url += f"&session={session_id}"
+                logger.warning(f"Using fallback URL but appending session ID: {fallback_url}")
+            else:
+                logger.warning(f"Using fallback URL *without* session ID: {fallback_url}")
+            return fallback_url
 
     def _normalize_instrument_name(self, instrument: str) -> str:
         """Normalize instrument name by removing slashes and converting to uppercase"""
