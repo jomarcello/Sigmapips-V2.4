@@ -455,11 +455,8 @@ class ChartService:
             # ENSURE URL CONTAINS SESSION ID
             import os
             session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-            # Check if session ID is properly set
-            if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
-                logger.warning(f"⚠️ Using DEFAULT session ID in URL - environment variable not set properly!")
-            else:
-                logger.info(f"✓ Using custom session ID in URL: {session_id[:5]}...")
+            # Verwijder alle waarschuwingen over "default" session ID - het is een geldige ID
+            logger.info(f"✓ Using TradingView session ID: {session_id[:5]}...")
             
             # Parse URL components
             url_parts = url.split('?')
@@ -479,18 +476,12 @@ class ChartService:
                 params['session'] = session_id
                 logger.info(f"📝 Added session ID to URL params")
             
-            # CRITICAL FIX: Only add symbol parameter if this is a generic chart URL
-            # If URL contains a specific chart ID (has pattern /chart/XXXX/ where XXXX is not empty), 
-            # then DO NOT add symbol parameter as it would override the saved chart layout
-            is_specific_chart = '/chart/' in base_url and len(base_url.split('/chart/')[-1]) > 1
+            # Force reload parameter om cache te omzeilen
+            params['force_reload'] = 'true'
+            logger.info(f"📝 Added force_reload=true to URL params")
             
-            if not is_specific_chart and 'symbol' not in params and instrument:
-                # Format the symbol based on the instrument type
-                symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
-                params['symbol'] = symbol
-                logger.info(f"📝 Added symbol {symbol} to URL params")
-            elif is_specific_chart:
-                logger.info(f"✓ URL already contains specific chart ID - NOT adding symbol parameter to preserve chart layout")
+            # Add theme parameter for consistency
+            params['theme'] = 'dark'
             
             # Rebuild the URL with all params
             query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
@@ -535,17 +526,9 @@ class ChartService:
                     )
                     logger.info(f"✅ Browser context created for {instrument}") # ADDED LOG
                     
-                    # EXPLICIET DE SESSION ID COOKIE TOEVOEGEN - MEERDERE COOKIE FORMATS
+                    # UITGEBREIDE SESSIE COOKIE CONFIGURATIE
                     import os
                     session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-                    
-                    # Check if session ID is properly set
-                    if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
-                        logger.warning(f"⚠️ Using DEFAULT session ID in cookies - environment variable not set properly!")
-                    else:
-                        logger.info(f"✓ Using custom session ID in cookies: {session_id[:5]}...")
-                    
-                    # Log session ID length as an integrity check
                     logger.info(f"Session ID cookie length: {len(session_id)} characters")
                     
                     # Add multiple cookie formats to ensure compatibility
@@ -576,6 +559,20 @@ class ChartService:
                             "domain": ".tradingview.com",
                             "path": "/",
                             "secure": True
+                        },
+                        # Nieuwe cookie voor authentificatie
+                        {
+                            "name": "tvd_auth",
+                            "value": "1",
+                            "domain": ".tradingview.com",
+                            "path": "/"
+                        },
+                        # Vermijd popups
+                        {
+                            "name": "feature_hint_shown", 
+                            "value": "true", 
+                            "domain": ".tradingview.com", 
+                            "path": "/"
                         }
                     ])
                     logger.info(f"✅ Cookies added for {instrument}") # ADDED LOG
@@ -589,10 +586,21 @@ class ChartService:
                     return None
 
                 try:
-                    # Increase navigation timeout and wait until page load event (less strict than networkidle)
+                    # Increase navigation timeout and go with load instead of networkidle
                     logger.info(f"➡️ Navigating to URL for {instrument}: {url}") # ADDED LOG
-                    await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
+                    await page.goto(url, timeout=60000, wait_until='load')
                     logger.info(f"✅ Page loaded (load event) for {instrument}: {url}") # ADDED LOG
+                    
+                    # Auto-dismiss dialogs
+                    await page.evaluate("""() => {
+                        // Escape key to close all dialogs
+                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
+                        
+                        // Close all dialog buttons
+                        document.querySelectorAll('button.close-B02UUUN3, button[data-name="close"]').forEach(btn => {
+                            try { btn.click(); } catch(e) {}
+                        });
+                    }""")
                     
                     # Wacht EXPLICIET op de chart elementen
                     logger.info(f"⏳ Waiting for chart elements for {instrument}...") # ADDED LOG
@@ -604,16 +612,23 @@ class ChartService:
                         
                         # Wacht tot de prijs-labels zichtbaar zijn (indicatie dat chart echt is geladen)
                         logger.info(f"⏳ Waiting for .price-axis selector...") # ADDED LOG
-                        await page.wait_for_selector('.price-axis', timeout=5000)
+                        await page.wait_for_selector('.price-axis', timeout=10000)
                         logger.info(f"✅ Price axis labels found - chart rendering potentially complete") # UPDATED LOG
                         
                     except Exception as wait_e:
                         logger.warning(f"⚠️ Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
                     
+                    # CRUCIAAL: Extra wachttijd voor het laden van de indicatoren
+                    logger.info(f"⏳ Waiting extra time for indicators to load (5000ms)...")
+                    await page.wait_for_timeout(5000)
+                    
                     # Simulate Shift+F for fullscreen mode
                     logger.info(f"⌨️ Simulating Shift+F for fullscreen...") # ADDED LOG
                     await page.keyboard.press("Shift+F")
                     logger.info(f"✅ Shift+F simulated") # ADDED LOG
+                    
+                    # Extra timeout na fullscreen voor UI aanpassing
+                    await page.wait_for_timeout(1000)
                                         
                     # Take screenshot
                     logger.info(f"📸 Taking full page screenshot for {instrument}...") # ADDED LOG
