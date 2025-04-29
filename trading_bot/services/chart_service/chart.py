@@ -859,33 +859,39 @@ class ChartService:
                         elif instrument == "US30":
                             # Format US30 prices with comma after second digit
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
                             analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
                             analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
                         elif instrument == "US500":
                             # Format US500 prices with comma after first digit
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
+
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
+
                             analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
                             analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
                             analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
                         elif instrument == "US100":
                             # Format US100 prices with comma after second digit
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
                             analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
                             analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
@@ -910,33 +916,39 @@ class ChartService:
                         elif instrument == "US30":
                             # Format US30 prices with comma after second digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
                             analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
                             analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                         elif instrument == "US500":
                             # Format US500 prices with comma after first digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
+
                             analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
                             analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
                             analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                         elif instrument == "US100":
                             # Format US100 prices with comma after second digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
                             analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
                             analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
@@ -961,33 +973,39 @@ class ChartService:
                         elif instrument == "US30":
                             # Format US30 prices with comma after second digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
                             analysis_text += f"and selling opportunities near {formatted_high}. "
                             analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
                         elif instrument == "US500":
                             # Format US500 prices with comma after first digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
+
                             analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
                             analysis_text += f"and selling opportunities near {formatted_high}. "
                             analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
                         elif instrument == "US100":
                             # Format US100 prices with comma after second digit
                             low_digits = str(int(analysis_data['low']))
-                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{f'{analysis_data["low"]:.2f}'.split('.')[1]}"
-                            
+                            low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
+                            formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
+
                             high_digits = str(int(analysis_data['high']))
-                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{f'{analysis_data["high"]:.2f}'.split('.')[1]}"
-                            
+                            high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
+                            formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
+
                             analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
                             analysis_text += f"and selling opportunities near {formatted_high}. "
                             analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
