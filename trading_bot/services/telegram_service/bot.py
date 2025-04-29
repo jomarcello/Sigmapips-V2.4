@@ -2,13 +2,16 @@ import os
 import json
 import asyncio
 import traceback
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
-import logging
-import copy
+from typing import Dict, Any, List, Optional, Union, Tuple
+import base64
 import re
 import time
 import random
+import socket
+import ssl
+import aiohttp
+import redis
+import logging
 
 from fastapi import FastAPI, Request, HTTPException, status
 from telegram import Bot, Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, InputMediaPhoto, InputMediaAnimation, InputMediaDocument, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
@@ -3036,6 +3039,11 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
         query = update.callback_query
         
         try:
+            # EXTRA DEBUGGING
+            logger.info(f"********** DEBUG: Chart service ID: {id(self.chart_service)} **********")
+            logger.info(f"********** DEBUG: Chart service chart_links keys: {list(self.chart_service.chart_links.keys())[:5]} **********")
+            logger.info(f"********** DEBUG: Session ID environment: {os.getenv('TRADINGVIEW_SESSION_ID')} **********")
+            
             # Add detailed debug logging
             logger.info(f"show_technical_analysis called for instrument: {instrument}, timeframe: {timeframe}")
             if query:
