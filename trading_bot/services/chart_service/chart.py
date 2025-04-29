@@ -490,13 +490,19 @@ class ChartService:
             if 'session' not in params:
                 params['session'] = session_id
                 logger.info(f"📝 Added session ID to URL params")
-                
-            # Ensure the symbol parameter is set if not already present
-            if 'symbol' not in params and instrument:
+            
+            # CRITICAL FIX: Only add symbol parameter if this is a generic chart URL
+            # If URL contains a specific chart ID (has pattern /chart/XXXX/ where XXXX is not empty), 
+            # then DO NOT add symbol parameter as it would override the saved chart layout
+            is_specific_chart = '/chart/' in base_url and len(base_url.split('/chart/')[-1]) > 1
+            
+            if not is_specific_chart and 'symbol' not in params and instrument:
                 # Format the symbol based on the instrument type
                 symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
                 params['symbol'] = symbol
                 logger.info(f"📝 Added symbol {symbol} to URL params")
+            elif is_specific_chart:
+                logger.info(f"✓ URL already contains specific chart ID - NOT adding symbol parameter to preserve chart layout")
             
             # Rebuild the URL with all params
             query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
