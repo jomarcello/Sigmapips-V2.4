@@ -2217,9 +2217,9 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                             reply_markup=InlineKeyboardMarkup(SIGNAL_ANALYSIS_KEYBOARD),
                             parse_mode=ParseMode.HTML
                         )
-                else:
-                    # Re-raise for other errors
-                    raise
+            else:
+                # Re-raise for other errors
+                raise
         return CHOOSE_ANALYSIS
 
     async def signal_calendar_callback(self, update: Update, context=None) -> int:
@@ -3159,7 +3159,7 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                 # If no chart image was generated, create a basic one with matplotlib
                 logger.warning(f"Chart image was empty or too small, using fallback chart for {instrument}")
                 chart_image = self.chart_service.get_fallback_chart(instrument)
-            
+                
             # Prepare caption with technical analysis
             caption = technical_analysis
             
@@ -3256,46 +3256,18 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                 
                 # Fallback error handling
                 try:
-                    # Define error text first so it's available in all code paths
-                    error_text = f"Error sending chart for {instrument}. Please try again later."
-                    
-                    # Check if the message has media (photo or animation)
-                    has_media = query.message.photo or hasattr(query.message, 'animation') and query.message.animation
-                    
-                    if has_media:
-                        logger.info("Message has media, using edit_message_media for error message")
-                        # Use a transparent 1px GIF for error message
-                        transparent_gif = "https://upload.wikimedia.org/wikipedia/commons/c/ca/1x1.png"
-                        await query.edit_message_media(
-                            media=InputMediaAnimation(
-                                media=transparent_gif,
-                                caption=error_text
-                            ),
+                    if loading_message:
+                        await loading_message.edit_text(
+                            text=f"Error sending chart for {instrument}. Please try again later.",
                             reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
                         )
                     else:
-                        # No media, safe to edit text
-                        if loading_message:
-                            await loading_message.edit_text(
-                                text=error_text,
-                                reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
-                            )
-                        else:
-                            await query.edit_message_text(
-                                text=error_text,
-                                reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
-                            )
-                except Exception as fallback_error:
-                    logger.error(f"Fallback error handling also failed: {str(fallback_error)}")
-                    # Last resort - try to send a new message
-                    try:
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=error_text,
+                        await query.edit_message_text(
+                            text=f"Error sending chart for {instrument}. Please try again later.",
                             reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
                         )
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
                 
                 return MENU
         
@@ -3331,7 +3303,7 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
         text = re.sub(r'<[^>]*>', '', text)
         
         # Ensure we don't have excessive newlines
-        text = re.sub(r'\n{3,}', '\n\n', text)  # Replace 3+ newlines with 2
+        text = re.sub(r'\n{3,}', '\n\n', text)
         
         return text
 
@@ -3533,49 +3505,6 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
 <b>Market Sentiment Breakdown:</b>
 🟢 Bullish: {bullish}%
 🔴 Bearish: {bearish}%
-```
-</b>"""
-            
-            # Determine which back button to use based on flow
-            back_callback = "back_to_signal_analysis" if is_from_signal else "back_to_analysis"
-            
-            # Show the sentiment analysis
-            try:
-                await query.edit_message_text(
-                    text=full_message,
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("⬅️ Back", callback_data=back_callback)
-                    ]]),
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception as e:
-                logger.error(f"Error updating message: {str(e)}")
-                # Fallback to sending a new message
-                try:
-                    await query.message.reply_text(
-                        text=full_message,
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("⬅️ Back", callback_data=back_callback)
-                        ]]),
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception as inner_e:
-                    logger.error(f"Error sending new message: {str(inner_e)}")
-            
-            return SHOW_RESULT
-        
-        except Exception as e:
-            logger.error(f"Error in show_sentiment_analysis: {str(e)}")
-            # Error recovery
-            try:
-                await query.edit_message_text(
-                    text="An error occurred. Please try again from the main menu.",
-                    reply_markup=InlineKeyboardMarkup(START_KEYBOARD)
-                )
-            except Exception:
-                pass
-            
-            return MENU
 ⚪️ Neutral: {neutral}%"""
 
             # Verwijder alle dubbele newlines om nog meer witruimte te voorkomen
@@ -4258,7 +4187,6 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
             )
         
         return SUBSCRIBE
-        
         
     async def get_subscribers_for_instrument(self, instrument: str, timeframe: str = None) -> List[int]:
         """
