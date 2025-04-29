@@ -26,6 +26,7 @@ from trading_bot.services.chart_service.base import TradingViewService
 # Import providers
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
+from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class ChartService:
             self.chart_providers = [
                 BinanceProvider(),      # Eerst Binance voor crypto's
                 YahooFinanceProvider(), # Dan Yahoo Finance voor andere markten
+                TradingViewNodeService(), # TradingView screenshot service
             ]
             
             # Initialiseer de chart links met de specifieke TradingView links
@@ -131,108 +133,106 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            logging.info("Chart service initialized with providers: Binance, YahooFinance")
+            # Initialize tradingview node service
+            self.tradingview_node = next((p for p in self.chart_providers if isinstance(p, TradingViewNodeService)), None)
+            if self.tradingview_node:
+                logging.info("TradingViewNodeService provider found")
+            else:
+                logging.warning("TradingViewNodeService provider not found in chart_providers")
             
+            logging.info("Chart service initialized with providers: Binance, YahooFinance, TradingViewNode")
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
 
     async def get_chart(self, instrument: str, timeframe: str = "1h", fullscreen: bool = False) -> bytes:
-        """Get chart image for instrument and timeframe"""
-        chart_image: Optional[bytes] = None
-        try:
-            logger.info(f"Getting chart for {instrument} ({timeframe}) fullscreen: {fullscreen}")
-            
-            # Zorg ervoor dat de services zijn geïnitialiseerd
-            if not hasattr(self, 'analysis_cache'):
-                logger.info("Services not initialized, initializing now")
-                await self.initialize()
-            
-            # Normaliseer instrument (verwijder /)
-            normalized_instrument = instrument.upper().replace("/", "")
-            logger.info(f"Normalized instrument: {normalized_instrument}")
-            
-            # 1. Zoek de TradingView URL op
-            chart_url = self.chart_links.get(normalized_instrument)
-            
-            # EXTRA LOGGING
-            if chart_url:
-                logger.info(f"TRADINGVIEW URL GEVONDEN: {chart_url} voor instrument {normalized_instrument}")
-            else:
-                logger.info(f"GEEN TRADINGVIEW URL GEVONDEN voor instrument {normalized_instrument}")
-                
-            logger.info(f"Chart URL lookup result for {normalized_instrument}: {'Found URL' if chart_url else 'No URL found'}")
+        """Get a chart for a specific instrument and timeframe."""
+        start_time = time.time()
+        logger.info(f"Getting chart for {instrument} with timeframe {timeframe}")
+        
+        # Controleer of de service is geïnitialiseerd
+        if not hasattr(self, 'chart_providers') or not self.chart_providers:
+            logger.error("Chart service not initialized")
+            return b''
 
-            if chart_url:
-                # DIRECTE AANROEP VAN TRADINGVIEWNODESERVICE
-                try:
-                    from trading_bot.services.chart_service.tradingview_node import TradingViewNodeService
-                    
-                    logger.info("********** USING DIRECT TRADINGVIEWNODESERVICE INSTEAD **********")
-                    node_service = TradingViewNodeService()
-                    
-                    # Initialiseer de service
-                    init_result = await node_service.initialize()
-                    logger.info(f"TradingViewNodeService initialized: {init_result}")
-                    
-                    # Neem screenshot
-                    screenshot_start = time.time()
-                    chart_image = await node_service.take_screenshot_of_url(chart_url, fullscreen)
-                    screenshot_end = time.time()
-                    
-                    logger.info(f"TradingViewNodeService screenshot completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
-                    
-                    # Als dat mislukt, val terug op de interne methode
-                    if not chart_image:
-                        logger.warning("TradingViewNodeService failed, falling back to internal method")
-                        
-                        # 2. Probeer TradingView screenshot te maken via interne methode
-                        logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
-                        
-                        # EXTRA DEBUG: Log before capturing tradingview screenshot
-                        logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
-                        try:
-                            screenshot_start = time.time()
-                            chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
-                            screenshot_end = time.time()
-                            logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
-                        except Exception as screen_e:
-                            logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
-                            chart_image = None
-                except Exception as direct_e:
-                    logger.error(f"Error with direct TradingViewNodeService: {str(direct_e)}", exc_info=True)
-                    
-                    # Fallback naar normale methode
-                    logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
-                    
-                    # EXTRA DEBUG: Log before capturing tradingview screenshot
-                    logger.info(f"About to call _capture_tradingview_screenshot for {normalized_instrument}")
+        # Normaliseer het instrument
+        orig_instrument = instrument
+        instrument = self._normalize_instrument_name(instrument)
+        logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
+
+        # Controleer of we een TradingView URL hebben voor dit instrument
+        tradingview_url = self.get_tradingview_url(instrument, timeframe)
+        if tradingview_url:
+            logger.info(f"Found TradingView URL for {instrument}: {tradingview_url}")
+            
+            # Gebruik TradingViewNodeService direct in plaats van de interne Playwright methode
+            for provider in self.chart_providers:
+                if isinstance(provider, TradingViewNodeService):
+                    logger.info(f"USING DIRECT TRADINGVIEWNODESERVICE FOR {instrument}")
                     try:
-                        screenshot_start = time.time()
-                        chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
-                        screenshot_end = time.time()
-                        logger.info(f"Screenshot capture completed in {screenshot_end - screenshot_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
-                    except Exception as screen_e:
-                        logger.error(f"Exception during _capture_tradingview_screenshot for {normalized_instrument}: {str(screen_e)}", exc_info=True)
-                        chart_image = None
-            else:
-                logger.warning(f"No TradingView URL found for instrument: {normalized_instrument}")
-
-            # 3. Als TradingView mislukt (of geen URL), gebruik fallback
-            if chart_image is None:
-                logger.warning(f"TradingView screenshot failed or URL not found for {normalized_instrument}. Using fallback chart.")
-                fallback_start = time.time()
-                chart_image = await self._generate_random_chart(normalized_instrument, timeframe)
-                fallback_end = time.time()
-                logger.info(f"Fallback chart generated in {fallback_end - fallback_start:.2f} seconds with result: {'Success' if chart_image else 'Failed'}")
-
-        except Exception as e:
-            logger.error(f"Error getting chart for {instrument}: {str(e)}", exc_info=True)
-            # Generate a simple random chart as emergency fallback
-            logger.warning(f"Using fallback chart due to unexpected error for {instrument}")
-            chart_image = await self._generate_random_chart(instrument, timeframe)
+                        # Roep de TradingViewNodeService direct aan
+                        screenshot = await provider.take_screenshot_of_url(tradingview_url, fullscreen=True)
+                        if screenshot:
+                            logger.info(f"Successfully captured screenshot using TradingViewNodeService for {instrument}")
+                            return screenshot
+                        else:
+                            logger.error(f"Failed to capture screenshot using TradingViewNodeService for {instrument}")
+                    except Exception as e:
+                        logger.error(f"Error using TradingViewNodeService for {instrument}: {str(e)}")
+                        logger.error(traceback.format_exc())
             
-        return chart_image if chart_image is not None else b'' # Return empty bytes if all fails
+            # Als directe TradingViewNodeService niet werkt, probeer dan de interne methode
+            logger.info(f"About to call _capture_tradingview_screenshot for {instrument}")
+            screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
+            if screenshot:
+                logger.info(f"Successfully captured tradingview screenshot for {instrument}")
+                return screenshot
+            else:
+                logger.error(f"Failed to capture tradingview screenshot for {instrument}")
+        else:
+            logger.warning(f"No TradingView URL found for {instrument}")
+
+        # Probeer een chart te genereren met behulp van providers
+        logger.info(f"Attempting to generate chart with providers for {instrument}")
+        for provider in self.chart_providers:
+            try:
+                if 'tradingview' in provider.__class__.__name__.lower():
+                    # Skip TradingView provider because we already tried it above
+                    continue
+                    
+                logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
+                chart_data = await provider.get_chart(instrument, timeframe)
+                if chart_data:
+                    logger.info(f"Successfully generated chart with {provider.__class__.__name__} for {instrument}")
+                    return chart_data
+                else:
+                    logger.warning(f"Provider {provider.__class__.__name__} returned no data for {instrument}")
+            except Exception as e:
+                logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
+
+        # Probeer een fallback chart te genereren
+        logger.warning(f"All providers failed for {instrument}, using fallback chart")
+        try:
+            fallback_chart = await self._fallback_chart(instrument, timeframe)
+            if fallback_chart:
+                logger.info(f"Generated fallback chart for {instrument}")
+                return fallback_chart
+        except Exception as e:
+            logger.error(f"Error generating fallback chart for {instrument}: {str(e)}")
+
+        # Als laatste redmiddel, probeer een nood-chart te maken
+        logger.warning(f"Fallback chart failed for {instrument}, using emergency chart")
+        try:
+            emergency_chart = await self._create_emergency_chart(instrument, timeframe)
+            if emergency_chart:
+                logger.info(f"Generated emergency chart for {instrument}")
+                return emergency_chart
+        except Exception as e:
+            logger.error(f"Error generating emergency chart for {instrument}: {str(e)}")
+            
+        # Als alles faalt, stuur een lege afbeelding terug
+        logger.error(f"All chart generation methods failed for {instrument}")
+        return b''
 
     async def _create_emergency_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
         """Create an emergency simple chart when all else fails"""
@@ -298,6 +298,20 @@ class ChartService:
                 logger.info("Matplotlib is available for chart generation")
             except ImportError:
                 logger.error("Matplotlib is not available, chart service may not function properly")
+            
+            # Initialize the TradingViewNodeService provider if available
+            for provider in self.chart_providers:
+                if isinstance(provider, TradingViewNodeService):
+                    logger.info("Initializing TradingViewNodeService provider")
+                    try:
+                        init_result = await provider.initialize()
+                        if init_result:
+                            logger.info("TradingViewNodeService provider initialized successfully")
+                        else:
+                            logger.warning("TradingViewNodeService provider initialization returned False")
+                    except Exception as e:
+                        logger.error(f"Error initializing TradingViewNodeService provider: {str(e)}")
+                        logger.error(traceback.format_exc())
             
             # Initialize technical analysis cache
             self.analysis_cache = {}
@@ -439,6 +453,9 @@ class ChartService:
 
     async def _capture_tradingview_screenshot(self, url: str, instrument: str) -> Optional[bytes]:
         """Capture screenshot of TradingView chart using Playwright"""
+        start_time = time.time()
+        screenshot_bytes = None
+        
         try:
             logger.info(f"******** CAPTURE TRADINGVIEW SCREENSHOT AANGEROEPEN voor {instrument} van {url} ********")
             logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
@@ -473,7 +490,28 @@ class ChartService:
                 try:
                     # Create a new page with larger viewport
                     logger.info(f"Creating browser page for {instrument}")
-                    page = await browser.new_page()
+                    context = await browser.new_context(
+                        viewport={"width": 1920, "height": 1080}
+                    )
+                    
+                    # EXPLICIET DE SESSION ID COOKIE TOEVOEGEN
+                    import os
+                    session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
+                    logger.info(f"Adding TradingView session cookie: {session_id[:5]}...")
+                    
+                    await context.add_cookies([
+                        {
+                            "name": "sessionid",
+                            "value": session_id,
+                            "domain": ".tradingview.com",
+                            "path": "/",
+                            "httpOnly": True,
+                            "secure": True,
+                            "sameSite": "Lax"
+                        }
+                    ])
+                    
+                    page = await context.new_page()
                 except Exception as page_e:
                     logger.error(f"Failed to create page for {instrument}: {str(page_e)}")
                     await browser.close()
@@ -484,52 +522,55 @@ class ChartService:
                     logger.info(f"Navigating to URL for {instrument}: {url}")
                     await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
                     logger.info(f"Page loaded (load event): {url}")
-                except playwright._impl._api_types.TimeoutError as timeout_e:
-                    logger.error(f"Playwright TimeoutError during operation for {instrument} at {url}: {str(timeout_e)}")
-                    await browser.close()
-                    return None
-                except Exception as goto_e:
-                    logger.error(f"Failed during page.goto for {instrument}: {str(goto_e)}")
-                    logger.error(f"Exception details: {traceback.format_exc()}")
-                    await browser.close()
-                    return None
-
-                try:
-                    # --- Simulate Shift+F for fullscreen ---
+                    
+                    # Wacht EXPLICIET op de chart elementen
+                    logger.info(f"Waiting for chart to be fully rendered...")
+                    try:
+                        # Wacht tot de chart canvas geladen is
+                        await page.wait_for_selector('.chart-container', timeout=20000)
+                        logger.info(f"Chart container found on page")
+                        
+                        # Extra wachttijd om zeker te zijn dat alles is geladen
+                        await page.wait_for_timeout(5000)
+                        logger.info(f"Extra wait completed for chart rendering")
+                    except Exception as wait_e:
+                        logger.warning(f"Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
+                    
+                    # Simulate Shift+F for fullscreen mode
                     logger.info(f"Simulating Shift+F for fullscreen...")
                     await page.keyboard.press("Shift+F")
                     
-                    # Wait additional time for fullscreen transition
+                    # Wait a bit after Shift+F to allow the UI to adjust
                     logger.info(f"Waiting after Shift+F.")
-                    await asyncio.sleep(4)
-                except Exception as key_e:
-                    logger.error(f"Failed during keyboard press for {instrument}: {str(key_e)}")
-                    logger.error(f"Exception details: {traceback.format_exc()}")
-                    # Continue, screenshot might still work
-
-                try:
-                    # Take screenshot (now fullscreen hopefully)
+                    await page.wait_for_timeout(3000)
+                    
+                    # Take screenshot
                     logger.info(f"Taking full page screenshot...")
-                    screenshot_bytes = await page.screenshot(full_page=True)
+                    screenshot_bytes = await page.screenshot(full_page=True, type='jpeg', quality=90)
                     logger.info(f"Successfully captured full page screenshot for {instrument}")
-                except Exception as screenshot_e:
-                    logger.error(f"Failed to take screenshot for {instrument}: {str(screenshot_e)}")
+                    
+                    # Close the browser explicitly
+                    await browser.close()
+                    logger.info(f"Browser closed successfully for {instrument}")
+                    
+                except Exception as navigation_e:
+                    logger.error(f"Failed during navigation/screenshot for {instrument}: {str(navigation_e)}")
                     logger.error(f"Exception details: {traceback.format_exc()}")
                     await browser.close()
                     return None
-                
-                # Close browser
-                try:
-                    await browser.close()
-                    logger.info(f"Playwright cleanup completed for {instrument}")
-                except Exception as close_e:
-                    logger.error(f"Error during browser cleanup for {instrument}: {str(close_e)}")
-                
-                return screenshot_bytes
-                
         except Exception as e:
-            logger.error(f"Unexpected error during TradingView screenshot capture for {instrument}: {str(e)}")
+            # Capture and log the full traceback for any errors
+            logger.error(f"Error capturing TradingView screenshot for {instrument}: {str(e)}")
             logger.error(f"Exception details: {traceback.format_exc()}")
+            return None
+        
+        # Controleer of de screenshot wel daadwerkelijk een afbeelding is
+        if screenshot_bytes and len(screenshot_bytes) > 1000:
+            end_time = time.time()
+            logger.info(f"Screenshot capture completed in {end_time - start_time:.2f} seconds with result: Success")
+            return screenshot_bytes
+        else:
+            logger.error(f"Screenshot capture failed: {'Empty bytes' if screenshot_bytes else 'No bytes returned'}")
             return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
@@ -1935,3 +1976,54 @@ class ChartService:
         except Exception as e:
             logger.error(f"Error fetching index price: {str(e)}")
             return None
+
+    def get_tradingview_url(self, instrument: str, timeframe: str = '1h') -> str:
+        """Get the TradingView chart URL for a specific instrument."""
+        try:
+            # Get environment session ID for authentication
+            session_id = os.environ.get('TRADINGVIEW_SESSION_ID', 'tvs_xxxxxxxxxxxxxx')
+            
+            # Main chart URL for EURUSD (full featured)
+            if instrument == 'EURUSD':
+                url = f"https://www.tradingview.com/chart/xknpxpcr/?timeframe={timeframe}&session={session_id}"
+                logger.info(f"Found TradingView URL for {instrument}: {url}")
+                return url
+                
+            # Use layout ID from config for other instruments
+            layout_id = self.config.get('tradingview_layout_id', 'xknpxpcr')
+            
+            # Format the symbol based on the instrument type
+            symbol = f"FX:{instrument}" if len(instrument) == 6 else instrument
+            
+            # Construct the URL with session ID for better authentication
+            url = f"https://www.tradingview.com/chart/{layout_id}/?symbol={symbol}&timeframe={timeframe}&session={session_id}"
+            logger.info(f"Constructed TradingView URL for {instrument}: {url}")
+            return url
+        except Exception as e:
+            logger.error(f"Error getting TradingView URL for {instrument}: {str(e)}")
+            # Fallback URL without session
+            return f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
+
+    def _normalize_instrument_name(self, instrument: str) -> str:
+        """Normalize instrument name by removing slashes and converting to uppercase"""
+        if not instrument:
+            return ""
+        
+        # Remove slashes and convert to uppercase
+        normalized = instrument.upper().replace("/", "").strip()
+        
+        # Handle common aliases
+        aliases = {
+            "GOLD": "XAUUSD",
+            "OIL": "XTIUSD",
+            "CRUDE": "XTIUSD",
+            "NAS100": "US100",
+            "NASDAQ": "US100",
+            "SPX": "US500",
+            "SP500": "US500",
+            "DOW": "US30",
+            "DAX": "DE40"
+        }
+        
+        # Return alias if found, otherwise return the normalized instrument
+        return aliases.get(normalized, normalized)
