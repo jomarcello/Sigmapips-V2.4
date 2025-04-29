@@ -183,6 +183,7 @@ class ChartService:
             
             # Direct call the internal Playwright method if URL exists
             logger.info(f"🖥️ Attempting TradingView screenshot via Playwright for {instrument}")
+            logger.info(f"🚨 Calling _capture_tradingview_screenshot with URL: {tradingview_url}") # Added this log line
             screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
             if screenshot:
                 # Add explicit size check
