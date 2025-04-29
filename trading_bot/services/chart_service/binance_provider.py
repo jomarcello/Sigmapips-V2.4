@@ -174,19 +174,22 @@ class BinanceProvider:
                     "MACD.hist": float(latest["MACD_hist"]),
                 }
                 
+                # Add standardized indicator names for better compatibility with chart service
+                standardized_indicators = BinanceProvider._standardize_indicator_names(indicators)
+                
                 # Add weekly high/low if available
                 if "weekly_high" in latest and "weekly_low" in latest:
-                    indicators["weekly_high"] = float(latest["weekly_high"])
-                    indicators["weekly_low"] = float(latest["weekly_low"])
+                    standardized_indicators["weekly_high"] = float(latest["weekly_high"])
+                    standardized_indicators["weekly_low"] = float(latest["weekly_low"])
                 else:
                     # Calculate approximate weekly high/low from available data
                     week_data = df.tail(168 if binance_interval == "1h" else 
                                       42 if binance_interval == "4h" else 
                                       7 if binance_interval == "1d" else df.shape[0])
-                    indicators["weekly_high"] = float(week_data["high"].max())
-                    indicators["weekly_low"] = float(week_data["low"].min())
+                    standardized_indicators["weekly_high"] = float(week_data["high"].max())
+                    standardized_indicators["weekly_low"] = float(week_data["low"].min())
                     
-                result = MarketData(instrument=instrument, indicators=indicators)
+                result = MarketData(instrument=instrument, indicators=standardized_indicators)
                 return result
                 
             except Exception as e:
@@ -497,3 +500,35 @@ class BinanceProvider:
                     retries += 1
                 else:
                     return None 
+
+    @staticmethod
+    def _standardize_indicator_names(indicators: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Standardize indicator names for compatibility with chart service.
+        Adds lowercase versions with underscores for all indicators.
+        
+        Args:
+            indicators: Dictionary with original indicator names
+            
+        Returns:
+            Dict: Dictionary with both original and standardized names
+        """
+        result = indicators.copy()  # Keep original names
+        
+        # Add standardized versions (lowercase with underscores)
+        mapping = {
+            "EMA20": "ema_20",
+            "EMA50": "ema_50", 
+            "EMA200": "ema_200",
+            "RSI": "rsi",
+            "MACD.macd": "macd",
+            "MACD.signal": "macd_signal",
+            "MACD.hist": "macd_hist"
+        }
+        
+        # Add all standardized versions
+        for orig_key, std_key in mapping.items():
+            if orig_key in indicators:
+                result[std_key] = indicators[orig_key]
+        
+        return result 
