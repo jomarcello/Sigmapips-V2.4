@@ -133,25 +133,52 @@ class BinanceProvider:
                     if BinanceProvider.API_KEY:
                         headers["X-MBX-APIKEY"] = BinanceProvider.API_KEY
                     
-                    async with session.get(f"{base_url}{endpoint}", params=params, headers=headers) as response:
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(f"Binance API error: {response.status}, Response: {error_text}")
+                    request_url = f"{base_url}{endpoint}"
+                    logger.info(f"[Binance Request] URL: {request_url}")
+                    logger.info(f"[Binance Request] PARAMS: {params}")
+                    logger.info(f"[Binance Request] HEADERS: {headers}")
+                    
+                    try:
+                        async with session.get(request_url, params=params, headers=headers, timeout=15) as response:
+                            if response.status != 200:
+                                error_text = await response.text()
+                                logger.error(f"[Binance Response Error] STATUS: {response.status}")
+                                logger.error(f"[Binance Response Error] HEADERS: {response.headers}")
+                                logger.error(f"[Binance Response Error] BODY: {error_text}")
+                                
+                                # Try another endpoint if available
+                                if retries < max_retries - 1:
+                                    BinanceProvider.switch_endpoint()
+                                    retries += 1
+                                    continue
+                                logger.error(f"[Binance] All endpoints failed for {formatted_symbol}. Giving up after {retries+1} attempts.")
+                                return None
                             
-                            # Try another endpoint if available
-                            if retries < max_retries - 1:
-                                BinanceProvider.switch_endpoint()
-                                retries += 1
-                                continue
-                            logger.error(f"[Binance] All endpoints failed for {formatted_symbol}. Giving up after {retries+1} attempts.")
-                            return None
-                        
-                        klines = await response.json()
-                        if not klines or not isinstance(klines, list):
-                            logger.error(f"Binance API returned invalid kline data: {klines}")
-                            return None
-                        
-                        logger.info(f"[Binance] Successfully retrieved {len(klines)} klines for {formatted_symbol}")
+                            klines = await response.json()
+                            if not klines or not isinstance(klines, list):
+                                logger.error(f"Binance API returned invalid kline data: {klines}")
+                                return None
+                            
+                            logger.info(f"[Binance] Successfully retrieved {len(klines)} klines for {formatted_symbol}")
+                            
+                    except aiohttp.ClientConnectorError as e:
+                        logger.error(f"[Binance Connection Error] Failed to connect to {request_url}: {str(e)}")
+                        if retries < max_retries - 1:
+                             BinanceProvider.switch_endpoint()
+                             retries += 1
+                             await asyncio.sleep(1) # Brief delay
+                             continue
+                        logger.error(f"[Binance] Connection failed after {retries+1} attempts for {formatted_symbol}.")
+                        return None
+                    except asyncio.TimeoutError:
+                        logger.error(f"[Binance Connection Error] Timeout connecting to {request_url}")
+                        if retries < max_retries - 1:
+                            BinanceProvider.switch_endpoint()
+                            retries += 1
+                            await asyncio.sleep(1) # Brief delay
+                            continue
+                        logger.error(f"[Binance] Timeout after {retries+1} attempts for {formatted_symbol}.")
+                        return None
                 
                 # Convert klines to dataframe
                 df = BinanceProvider._klines_to_dataframe(klines)
