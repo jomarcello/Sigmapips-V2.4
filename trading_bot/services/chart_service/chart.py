@@ -165,24 +165,8 @@ class ChartService:
         if tradingview_url:
             logger.info(f"Found TradingView URL for {instrument}: {tradingview_url}")
             
-            # Gebruik TradingViewNodeService direct in plaats van de interne Playwright methode
-            for provider in self.chart_providers:
-                if isinstance(provider, TradingViewNodeService):
-                    logger.info(f"USING DIRECT TRADINGVIEWNODESERVICE FOR {instrument}")
-                    try:
-                        # Roep de TradingViewNodeService direct aan
-                        screenshot = await provider.take_screenshot_of_url(tradingview_url, fullscreen=True)
-                        if screenshot:
-                            logger.info(f"Successfully captured screenshot using TradingViewNodeService for {instrument}")
-                            return screenshot
-                        else:
-                            logger.error(f"Failed to capture screenshot using TradingViewNodeService for {instrument}")
-                    except Exception as e:
-                        logger.error(f"Error using TradingViewNodeService for {instrument}: {str(e)}")
-                        logger.error(traceback.format_exc())
-            
-            # Als directe TradingViewNodeService niet werkt, probeer dan de interne methode
-            logger.info(f"About to call _capture_tradingview_screenshot for {instrument}")
+            # Direct call the internal Playwright method if URL exists
+            logger.info(f"Attempting TradingView screenshot via Playwright for {instrument}")
             screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
             if screenshot:
                 logger.info(f"Successfully captured tradingview screenshot for {instrument}")
@@ -530,9 +514,9 @@ class ChartService:
                         await page.wait_for_selector('.chart-container', timeout=20000)
                         logger.info(f"Chart container found on page")
                         
-                        # Extra wachttijd om zeker te zijn dat alles is geladen
-                        await page.wait_for_timeout(5000)
-                        logger.info(f"Extra wait completed for chart rendering")
+                        # # Extra wachttijd om zeker te zijn dat alles is geladen
+                        # await page.wait_for_timeout(5000) # REMOVED FIXED WAIT
+                        # logger.info(f"Extra wait completed for chart rendering")
                     except Exception as wait_e:
                         logger.warning(f"Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
                     
@@ -540,9 +524,9 @@ class ChartService:
                     logger.info(f"Simulating Shift+F for fullscreen...")
                     await page.keyboard.press("Shift+F")
                     
-                    # Wait a bit after Shift+F to allow the UI to adjust
-                    logger.info(f"Waiting after Shift+F.")
-                    await page.wait_for_timeout(3000)
+                    # # Wait a bit after Shift+F to allow the UI to adjust
+                    # logger.info(f"Waiting after Shift+F.") # REMOVED FIXED WAIT
+                    # await page.wait_for_timeout(3000) # REMOVED FIXED WAIT
                     
                     # Take screenshot
                     logger.info(f"Taking full page screenshot...")
