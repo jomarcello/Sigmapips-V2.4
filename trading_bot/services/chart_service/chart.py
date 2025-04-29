@@ -139,6 +139,7 @@ class ChartService:
 
     async def get_chart(self, instrument: str, timeframe: str = "1h", fullscreen: bool = False) -> bytes:
         """Get chart image for instrument and timeframe"""
+        chart_image: Optional[bytes] = None
         try:
             logger.info(f"Getting chart for {instrument} ({timeframe}) fullscreen: {fullscreen}")
             
@@ -148,18 +149,30 @@ class ChartService:
                 await self.initialize()
             
             # Normaliseer instrument (verwijder /)
-            instrument = instrument.upper().replace("/", "")
+            normalized_instrument = instrument.upper().replace("/", "")
             
-            # Probeer om een chart te genereren met onze fallback methode (matplotlib)
-            logger.info(f"Generating chart image for {instrument} using matplotlib")
-            return await self._generate_random_chart(instrument, timeframe)
-            
+            # 1. Zoek de TradingView URL op
+            chart_url = self.chart_links.get(normalized_instrument)
+
+            if chart_url:
+                # 2. Probeer TradingView screenshot te maken
+                logger.info(f"Found TradingView URL for {normalized_instrument}: {chart_url}")
+                chart_image = await self._capture_tradingview_screenshot(chart_url, normalized_instrument)
+            else:
+                logger.warning(f"No TradingView URL found for instrument: {normalized_instrument}")
+
+            # 3. Als TradingView mislukt (of geen URL), gebruik fallback
+            if chart_image is None:
+                logger.warning(f"TradingView screenshot failed or URL not found for {normalized_instrument}. Using fallback chart.")
+                chart_image = await self._generate_random_chart(normalized_instrument, timeframe)
+
         except Exception as e:
-            logger.error(f"Error getting chart: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error getting chart for {normalized_instrument}: {str(e)}", exc_info=True)
+            # Generate a simple random chart as emergency fallback
+            logger.warning(f"Using fallback chart due to unexpected error for {normalized_instrument}")
+            chart_image = await self._generate_random_chart(normalized_instrument, timeframe)
             
-            # Generate a simple random chart
-            return await self._generate_random_chart(instrument, timeframe)
+        return chart_image if chart_image is not None else b'' # Return empty bytes if all fails
 
     async def _create_emergency_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
         """Create an emergency simple chart when all else fails"""
@@ -363,6 +376,51 @@ class ChartService:
             logger.error(f"Error generating chart: {str(e)}")
             logger.error(traceback.format_exc())
             return b''
+
+    async def _capture_tradingview_screenshot(self, url: str, instrument: str) -> Optional[bytes]:
+        """Attempts to capture a screenshot of a TradingView chart using Playwright."""
+        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+        screenshot_bytes: Optional[bytes] = None
+        browser = None
+        playwright = None
+
+        logger.info(f"Attempting to capture TradingView screenshot for {instrument} from {url}")
+
+        try:
+            playwright = await async_playwright().start()
+            # Try launching Chromium. Add options if needed (e.g., proxy).
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+
+            # Increase navigation timeout and wait until page load event (less strict than networkidle)
+            await page.goto(url, timeout=60000, wait_until='load') # Changed from networkidle to load
+            logger.info(f"Page loaded (load event): {url}")
+
+            # --- Simulate Shift+F for fullscreen ---
+            logger.info("Simulating Shift+F for fullscreen...")
+            await page.keyboard.press('Shift+F')
+
+            # Wait a bit for the fullscreen transition to potentially complete
+            await asyncio.sleep(4) # Increased wait time to 4 seconds for stability
+            logger.info("Waited after Shift+F.")
+
+            # --- Take screenshot of the full page ---
+            logger.info("Taking full page screenshot...")
+            screenshot_bytes = await page.screenshot(full_page=True, type='png', timeout=30000) # Added timeout
+            logger.info(f"Successfully captured full page screenshot for {instrument}")
+
+        except PlaywrightTimeoutError as pte:
+            logger.error(f"Playwright TimeoutError during operation for {instrument} at {url}: {pte}")
+        except Exception as e:
+            logger.error(f"Error capturing TradingView screenshot for {instrument}: {str(e)}", exc_info=True)
+        finally:
+            if browser:
+                await browser.close()
+            if playwright:
+                await playwright.stop()
+            logger.info(f"Playwright cleanup completed for {instrument}")
+
+        return screenshot_bytes
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
         """
