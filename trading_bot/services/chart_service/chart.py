@@ -478,12 +478,22 @@ class ChartService:
                         viewport={"width": 1920, "height": 1080}
                     )
                     
-                    # EXPLICIET DE SESSION ID COOKIE TOEVOEGEN
+                    # EXPLICIET DE SESSION ID COOKIE TOEVOEGEN - MEERDERE COOKIE FORMATS
                     import os
                     session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-                    logger.info(f"Adding TradingView session cookie: {session_id[:5]}...")
                     
+                    # Check if session ID is properly set
+                    if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
+                        logger.warning(f"⚠️ Using DEFAULT session ID in cookies - environment variable not set properly!")
+                    else:
+                        logger.info(f"✓ Using custom session ID in cookies: {session_id[:5]}...")
+                    
+                    # Log session ID length as an integrity check
+                    logger.info(f"Session ID cookie length: {len(session_id)} characters")
+                    
+                    # Add multiple cookie formats to ensure compatibility
                     await context.add_cookies([
+                        # Traditional sessionid cookie
                         {
                             "name": "sessionid",
                             "value": session_id,
@@ -492,6 +502,22 @@ class ChartService:
                             "httpOnly": True,
                             "secure": True,
                             "sameSite": "Lax"
+                        },
+                        # Alternative sid cookie
+                        {
+                            "name": "tv_session",
+                            "value": session_id,
+                            "domain": ".tradingview.com",
+                            "path": "/",
+                            "secure": True
+                        },
+                        # Another possible format
+                        {
+                            "name": "session",
+                            "value": session_id,
+                            "domain": ".tradingview.com",
+                            "path": "/",
+                            "secure": True
                         }
                     ])
                     
@@ -510,13 +536,14 @@ class ChartService:
                     # Wacht EXPLICIET op de chart elementen
                     logger.info(f"Waiting for chart to be fully rendered...")
                     try:
-                        # Wacht tot de chart canvas geladen is
+                        # Wacht tot de chart container aanwezig is
                         await page.wait_for_selector('.chart-container', timeout=20000)
                         logger.info(f"Chart container found on page")
                         
-                        # # Extra wachttijd om zeker te zijn dat alles is geladen
-                        # await page.wait_for_timeout(5000) # REMOVED FIXED WAIT
-                        # logger.info(f"Extra wait completed for chart rendering")
+                        # Wacht tot de prijs-labels zichtbaar zijn (indicatie dat chart echt is geladen)
+                        await page.wait_for_selector('.price-axis', timeout=5000)
+                        logger.info(f"Price axis labels found - chart rendering complete")
+                        
                     except Exception as wait_e:
                         logger.warning(f"Wait for chart elements failed: {str(wait_e)}, continuing anyway...")
                     
@@ -1967,12 +1994,27 @@ class ChartService:
         try:
             # Get environment session ID for authentication - standardized default
             session_id = os.getenv('TRADINGVIEW_SESSION_ID', 'z90l85p2anlgdwfppsrdnnfantz48z1o')
-            logger.info(f"Using TradingView Session ID: {session_id[:5]}...")
+            # Check if session ID is properly set
+            if session_id == 'z90l85p2anlgdwfppsrdnnfantz48z1o':
+                logger.warning(f"⚠️ Using DEFAULT session ID - environment variable not set properly!")
+            else:
+                logger.info(f"✓ Using custom session ID from environment: {session_id[:5]}...")
+                
+            # Log session ID length as an integrity check
+            logger.info(f"Session ID length: {len(session_id)} characters")
             
             # Main chart URL for EURUSD (full featured)
             if instrument == 'EURUSD':
-                url = f"https://www.tradingview.com/chart/xknpxpcr/?timeframe={timeframe}&session={session_id}"
-                logger.info(f"Found TradingView URL for {instrument}: {url}")
+                # Ensure clean URL construction with proper encoding
+                base_url = "https://www.tradingview.com/chart/xknpxpcr/"
+                params = {
+                    'timeframe': timeframe,
+                    'session': session_id
+                }
+                # Construct URL with properly encoded parameters
+                param_string = "&".join([f"{k}={v}" for k, v in params.items()])
+                url = f"{base_url}?{param_string}" 
+                logger.info(f"Built TradingView URL for {instrument}: {url}")
                 return url
                 
             # Use layout ID from config for other instruments
@@ -1987,18 +2029,31 @@ class ChartService:
             # Format the symbol based on the instrument type
             symbol = f"FX:{instrument}" if len(instrument) == 6 and all(c.isalpha() for c in instrument) else instrument
             
-            # Construct the URL with session ID for better authentication
-            url = f"https://www.tradingview.com/chart/{layout_id}/?symbol={symbol}&timeframe={timeframe}&session={session_id}"
-            logger.info(f"Constructed TradingView URL for {instrument}: {url}")
+            # Construct the URL with session ID for better authentication - using proper parameter formatting
+            base_url = f"https://www.tradingview.com/chart/{layout_id}/"
+            params = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'session': session_id
+            }
+            # Construct URL with properly encoded parameters
+            param_string = "&".join([f"{k}={v}" for k, v in params.items()])
+            url = f"{base_url}?{param_string}"
+            
+            logger.info(f"Built TradingView URL for {instrument} with session ID: {url}")
             return url
         except Exception as e:
             logger.error(f"Error getting TradingView URL for {instrument}: {str(e)}")
             logger.error(traceback.format_exc()) # Log full traceback
-            # Fallback URL - still try to add session if available
+            # Fallback URL - still try to add session if available with manual formatting
             fallback_url = f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
             if session_id:
-                fallback_url += f"&session={session_id}"
-                logger.warning(f"Using fallback URL but appending session ID: {fallback_url}")
+                # Ensure no duplicate parameters by using a clean approach
+                if '?' in fallback_url:
+                    fallback_url += f"&session={session_id}"
+                else:
+                    fallback_url += f"?session={session_id}"
+                logger.warning(f"Using fallback URL with session ID: {fallback_url}")
             else:
                 logger.warning(f"Using fallback URL *without* session ID: {fallback_url}")
             return fallback_url
