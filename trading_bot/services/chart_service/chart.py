@@ -2031,8 +2031,18 @@ class ChartService:
             layout_id = 'xknpxpcr'
             
             # Format symbol correctly based on type
-            symbol = f"FX:{instrument_upper}" if len(instrument_upper) == 6 and all(c.isalpha() for c in instrument_upper) else instrument_upper
-            
+            # Check if it looks like a crypto pair (e.g., ends in USD or USDT)
+            is_crypto = instrument_upper.endswith("USD") or instrument_upper.endswith("USDT")
+            if is_crypto and len(instrument_upper) > 3: # Basic check
+                 # Attempt to format as BINANCE:SYMBOL (assuming USDT pair is preferred by Binance)
+                 base_symbol = instrument_upper.replace("USDT", "").replace("USD", "")
+                 # Ensure it ends with USDT for the Binance ticker lookup
+                 symbol = f"BINANCE:{base_symbol}USDT"
+            elif len(instrument_upper) == 6 and all(c.isalpha() for c in instrument_upper):
+                 symbol = f"FX:{instrument_upper}" # Forex pair
+            else:
+                 symbol = instrument_upper # Default to the normalized instrument name for indices/commodities
+
             # Build URL
             base_url = f"https://www.tradingview.com/chart/{layout_id}/"
             params = {
