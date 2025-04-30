@@ -1141,6 +1141,20 @@ class ChartService:
                     analysis_text += f"Daily Low:    {format_crypto(daily_low)}\n"
                     analysis_text += f"Weekly High:  {format_crypto(weekly_high)}\n"
                     analysis_text += f"Weekly Low:   {format_crypto(weekly_low)}\n\n"
+                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                    # Format oil prices with 2 decimal places
+                    def format_oil(price):
+                        price_str = f"{price:.2f}"
+                        parts = price_str.split('.')
+                        digits = parts[0]
+                        # Format oil with commas for thousands
+                        formatted_integer = f"{int(digits):,}"
+                        return f"{formatted_integer}.{parts[1]}"
+
+                    analysis_text += f"Daily High:   {format_oil(daily_high)}\n"
+                    analysis_text += f"Daily Low:    {format_oil(daily_low)}\n"
+                    analysis_text += f"Weekly High:  {format_oil(weekly_high)}\n"
+                    analysis_text += f"Weekly Low:   {format_oil(weekly_low)}\n\n"
                 else:
                     analysis_text += f"Daily High:   {daily_high:.{precision}f}\n"
                     analysis_text += f"Daily Low:    {daily_low:.{precision}f}\n"
@@ -1206,6 +1220,18 @@ class ChartService:
                     
                     analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
                     analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
+                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                    # Format oil EMAs with commas for thousands
+                    ema50_str = f"{ema_50:.2f}"
+                    ema50_parts = ema50_str.split('.')
+                    ema50_formatted = f"{int(ema50_parts[0]):,}.{ema50_parts[1]}"
+                    
+                    ema200_str = f"{ema_200:.2f}"
+                    ema200_parts = ema200_str.split('.')
+                    ema200_formatted = f"{int(ema200_parts[0]):,}.{ema200_parts[1]}"
+                    
+                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
+                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
                 else:
                     analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema_50:.{precision}f}) and "
                     analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema_200:.{precision}f}), confirming {ma_status} bias.\n\n"
@@ -1265,6 +1291,19 @@ class ChartService:
                         analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
                         analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
                         analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
+                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                        # Format oil prices with 2 decimal places and commas for thousands
+                        daily_high_str = f"{daily_high:.2f}"
+                        daily_high_parts = daily_high_str.split('.')
+                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                        
+                        daily_low_str = f"{daily_low:.2f}"
+                        daily_low_parts = daily_low_str.split('.')
+                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
+                        
+                        analysis_text += f"Watch for a breakout above {formatted_daily_high} for further upside. "
+                        analysis_text += f"Maintain a buy bias while price holds above {formatted_daily_low}. "
+                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
                     else:
                         analysis_text += f"Watch for a breakout above {analysis_data['high']:.{precision}f} for further upside. "
                         analysis_text += f"Maintain a buy bias while price holds above {analysis_data['low']:.{precision}f}. "
@@ -1321,6 +1360,19 @@ class ChartService:
 
                         analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
                         analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
+                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
+                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                        # Format oil prices with 2 decimal places and commas for thousands
+                        daily_low_str = f"{daily_low:.2f}"
+                        daily_low_parts = daily_low_str.split('.')
+                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
+                        
+                        daily_high_str = f"{daily_high:.2f}"
+                        daily_high_parts = daily_high_str.split('.')
+                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                        
+                        analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
+                        analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
                         analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                     else:
                         analysis_text += f"Watch for a breakdown below {analysis_data['low']:.{precision}f} for further downside. "
@@ -1379,6 +1431,19 @@ class ChartService:
                         analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
                         analysis_text += f"and selling opportunities near {formatted_high}. "
                         analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
+                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                        # Format oil prices with 2 decimal places and commas for thousands
+                        daily_low_str = f"{daily_low:.2f}"
+                        daily_low_parts = daily_low_str.split('.')
+                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
+                        
+                        daily_high_str = f"{daily_high:.2f}"
+                        daily_high_parts = daily_high_str.split('.')
+                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                        
+                        analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
+                        analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
+                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                     else:
                         analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {analysis_data['low']:.{precision}f} "
                         analysis_text += f"and selling opportunities near {analysis_data['high']:.{precision}f}. "
@@ -1607,6 +1672,18 @@ class ChartService:
 
                 formatted_price = format_crypto(current_price)
                 analysis_text += f"Price is currently trading near current price of {formatted_price}, "
+            elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                # Format oil price with 2 decimal places
+                def format_oil(price):
+                    price_str = f"{price:.2f}"
+                    parts = price_str.split('.')
+                    digits = parts[0]
+                    # Format oil with commas for thousands
+                    formatted_integer = f"{int(digits):,}"
+                    return f"{formatted_integer}.{parts[1]}"
+                
+                formatted_price = format_oil(current_price)
+                analysis_text += f"Price is currently trading near current price of {formatted_price}, "
             else:
                 analysis_text += f"Price is currently trading near current price of {current_price:.{precision}f}, "
             
@@ -1667,6 +1744,20 @@ class ChartService:
                 analysis_text += f"Daily Low:    {format_us100(daily_low)}\n"
                 analysis_text += f"Weekly High:  {format_us100(weekly_high)}\n"
                 analysis_text += f"Weekly Low:   {format_us100(weekly_low)}\n\n"
+            elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                # Format oil prices with 2 decimal places
+                def format_oil(price):
+                    price_str = f"{price:.2f}"
+                    parts = price_str.split('.')
+                    digits = parts[0]
+                    # Format oil with commas for thousands
+                    formatted_integer = f"{int(digits):,}"
+                    return f"{formatted_integer}.{parts[1]}"
+
+                analysis_text += f"Daily High:   {format_oil(daily_high)}\n"
+                analysis_text += f"Daily Low:    {format_oil(daily_low)}\n"
+                analysis_text += f"Weekly High:  {format_oil(weekly_high)}\n"
+                analysis_text += f"Weekly Low:   {format_oil(weekly_low)}\n\n"
             else:
                 # Default formatting
                 analysis_text += f"Daily High:   {daily_high:.{precision}f}\n"
@@ -1726,6 +1817,18 @@ class ChartService:
                 
                 analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
                 analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
+            elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                # Format oil EMAs with commas for thousands
+                ema50_str = f"{ema_50:.2f}"
+                ema50_parts = ema50_str.split('.')
+                ema50_formatted = f"{int(ema50_parts[0]):,}.{ema50_parts[1]}"
+                
+                ema200_str = f"{ema_200:.2f}"
+                ema200_parts = ema200_str.split('.')
+                ema200_formatted = f"{int(ema200_parts[0]):,}.{ema200_parts[1]}"
+                
+                analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
+                analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
             else:
                 analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema_50:.{precision}f}) and "
                 analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema_200:.{precision}f}), confirming {ma_status} bias.\n\n"
@@ -1775,6 +1878,19 @@ class ChartService:
                     
                     daily_low_digits = str(int(daily_low))
                     formatted_daily_low = f"{daily_low_digits[:2]},{daily_low_digits[2:]}.{f'{daily_low:.2f}'.split('.')[1]}"
+                    
+                    analysis_text += f"Watch for a breakout above {formatted_daily_high} for further upside. "
+                    analysis_text += f"Maintain a buy bias while price holds above {formatted_daily_low}. "
+                    analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
+                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                    # Format oil prices with 2 decimal places and commas for thousands
+                    daily_high_str = f"{daily_high:.2f}"
+                    daily_high_parts = daily_high_str.split('.')
+                    formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                    
+                    daily_low_str = f"{daily_low:.2f}"
+                    daily_low_parts = daily_low_str.split('.')
+                    formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
                     
                     analysis_text += f"Watch for a breakout above {formatted_daily_high} for further upside. "
                     analysis_text += f"Maintain a buy bias while price holds above {formatted_daily_low}. "
@@ -1830,6 +1946,19 @@ class ChartService:
                     analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
                     analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
                     analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
+                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                    # Format oil prices with 2 decimal places and commas for thousands
+                    daily_low_str = f"{daily_low:.2f}"
+                    daily_low_parts = daily_low_str.split('.')
+                    formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
+                    
+                    daily_high_str = f"{daily_high:.2f}"
+                    daily_high_parts = daily_high_str.split('.')
+                    formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                    
+                    analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
+                    analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
+                    analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                 else:
                     analysis_text += f"Watch for a breakdown below {daily_low:.{precision}f} for further downside. "
                     analysis_text += f"Maintain a sell bias while price holds below {daily_high:.{precision}f}. "
@@ -1881,6 +2010,19 @@ class ChartService:
                     analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
                     analysis_text += f"and selling opportunities near {formatted_high}. "
                     analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
+                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
+                    # Format oil prices with 2 decimal places and commas for thousands
+                    daily_low_str = f"{daily_low:.2f}"
+                    daily_low_parts = daily_low_str.split('.')
+                    formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
+                    
+                    daily_high_str = f"{daily_high:.2f}"
+                    daily_high_parts = daily_high_str.split('.')
+                    formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
+                    
+                    analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
+                    analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
+                    analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
                 else:
                     analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {daily_low:.{precision}f} "
                     analysis_text += f"and selling opportunities near {daily_high:.{precision}f}. "
