@@ -1374,7 +1374,7 @@ class ChartService:
                         
                         analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
                         analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
+                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
                     else:
                         analysis_text += f"Watch for a breakdown below {analysis_data['low']:.{precision}f} for further downside. "
                         analysis_text += f"Maintain a sell bias while price holds below {analysis_data['high']:.{precision}f}. "
@@ -2351,7 +2351,7 @@ class ChartService:
             return "index"
             
         # Specific known instruments
-        if instrument == "XAUUSD" or instrument == "XAGUSD" or instrument == "XTIUSD" or instrument == "WTIUSD":
+        if instrument == "XAUUSD" or instrument == "XAGUSD" or instrument == "XTIUSD" or instrument == "WTIUSD" or instrument == "USOIL":
             logger.info(f"{instrument} detected as commodity (specific check)")
             return "commodity"
             
@@ -2407,7 +2407,7 @@ class ChartService:
             return 2
             
         # Crude oil uses 2 decimal places
-        if instrument in ["XTIUSD", "WTIUSD", "OIL"]:
+        if instrument in ["XTIUSD", "WTIUSD", "OIL", "USOIL"]:
             return 2
             
         # JPY pairs use 3 decimal places
