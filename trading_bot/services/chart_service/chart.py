@@ -71,6 +71,7 @@ class ChartService:
                 # Commodities
                 "XAUUSD": "https://www.tradingview.com/chart/bylCuCgc/",
                 "XTIUSD": "https://www.tradingview.com/chart/zmsuvPgj/",  # Bijgewerkte link voor Oil
+                "USOIL": "https://www.tradingview.com/chart/zmsuvPgj/",  # Dezelfde link als Oil
                 
                 # Currencies
                 "EURUSD": "https://www.tradingview.com/chart/zmsuvPgj/",  # Bijgewerkte link voor EURUSD
