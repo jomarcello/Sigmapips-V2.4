@@ -683,7 +683,7 @@ class YahooFinanceProvider:
             return "GC=F"  # Gold futures
         elif instrument == "XAGUSD":
             return "SI=F"  # Silver futures (not SL=F)
-        elif instrument in ["XTIUSD", "WTIUSD"]:
+        elif instrument in ["XTIUSD", "WTIUSD", "USOIL"]:
             return "CL=F"  # WTI Crude Oil futures
         elif instrument == "XBRUSD":
             return "BZ=F"  # Brent Crude Oil futures
