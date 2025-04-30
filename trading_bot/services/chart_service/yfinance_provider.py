@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from tenacity import retry, stop_after_attempt, wait_exponential
 import yfinance as yf
+import functools
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,20 @@ class YahooFinanceProvider:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 11.5; rv:90.0) Gecko/20100101 Firefox/90.0',
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36 Edg/92.0.902.55',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_5_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Safari/605.1.15'
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_5_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Safari/605.1.15',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_0_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
+                'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0'
             ]
             
             retries = Retry(
-                total=5,
-                backoff_factor=1,
+                total=10,  # Increase from 5 to 10
+                backoff_factor=2.5,  # More aggressive backoff
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["HEAD", "GET", "POST", "OPTIONS"]
+                allowed_methods=["HEAD", "GET", "POST", "OPTIONS"],
+                respect_retry_after_header=True  # Honor Retry-After headers
             )
-            adapter = HTTPAdapter(max_retries=retries, pool_maxsize=10)
+            adapter = HTTPAdapter(max_retries=retries, pool_maxsize=10, pool_connections=10)
             session.mount("http://", adapter)
             session.mount("https://", adapter)
             
@@ -97,100 +102,109 @@ class YahooFinanceProvider:
         if YahooFinanceProvider._last_api_call > 0:
             time_since_last_call = current_time - YahooFinanceProvider._last_api_call
             if time_since_last_call < YahooFinanceProvider._min_delay_between_calls:
-                delay = YahooFinanceProvider._min_delay_between_calls - time_since_last_call + random.uniform(0.1, 0.5)
+                delay = YahooFinanceProvider._min_delay_between_calls - time_since_last_call + random.uniform(0.5, 2.0)
                 logger.info(f"Rate limiting: Waiting {delay:.2f} seconds before next call")
                 await asyncio.sleep(delay)
+        
+        # Add jitter to avoid synchronized API calls
+        jitter = random.uniform(0.2, 1.0)
+        await asyncio.sleep(jitter)
+        
         YahooFinanceProvider._last_api_call = time.time()
 
     @staticmethod
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=4, max=60),
+        stop=stop_after_attempt(5),  # Increase from 3 to 5 attempts
+        wait=wait_exponential(multiplier=3, min=5, max=120),  # Longer wait times: min 5s, max 120s
         reraise=True
     )
     async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 30, original_symbol: str = None) -> pd.DataFrame:
-        """Download data directly from Yahoo Finance using yfinance"""
+        """
+        Download financial data from Yahoo Finance.
+        
+        Args:
+            symbol: The ticker symbol (e.g., AAPL, EURUSD=X)
+            start_date: Start date for the data
+            end_date: End date for the data
+            interval: Data interval (e.g., 1d, 1h)
+            timeout: Request timeout in seconds
+            original_symbol: Original symbol for reference
+            
+        Returns:
+            pd.DataFrame: DataFrame with OHLCV data
+        """
+        
         loop = asyncio.get_event_loop()
         
         def download():
+            logger.info(f"[Yahoo] Downloading data for {symbol} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} with interval {interval}")
+            
             try:
-                # Config for yfinance to use our session with headers
+                # Reduce retries and use shorter timeout for faster response
+                import yfinance as yf
+                
+                # Set a shorter timeout for yfinance through the session
                 session = YahooFinanceProvider._get_session()
-                logger.info(f"[Yahoo] Using requests session with headers: User-Agent={session.headers.get('User-Agent', 'Unknown')[:30]}...")
+                session.request = functools.partial(session.request, timeout=10)  # Reduce session timeout to 10 seconds
                 
-                # Conditioneel de set_tz_session_for_downloading gebruiken als deze beschikbaar is
-                try:
-                    if hasattr(yf, 'set_tz_session_for_downloading'):
-                        yf.set_tz_session_for_downloading(session=session)
-                        logger.info("[Yahoo] Successfully set custom session for yfinance")
-                    else:
-                        logger.warning("[Yahoo] Function set_tz_session_for_downloading not available in this yfinance version")
-                        # Voor oudere versies van yfinance kunnen we proberen de session direct te gebruiken
-                except Exception as e:
-                    logger.warning(f"[Yahoo] Error setting custom session: {str(e)}")
-                
-                # Log the exact download parameters
-                logger.info(f"[Yahoo] Download parameters - Symbol: {symbol}, Start: {start_date}, End: {end_date}, Interval: {interval}, Timeout: {timeout}s")
-                
-                # Method 1: Use direct download which works better for most tickers
-                logger.info(f"[Yahoo] Attempting direct download method with yf.download for {symbol}")
+                # Try first with yfinance download method (multi-threaded)
                 try:
                     df = yf.download(
-                        symbol, 
+                        symbol,
                         start=start_date,
                         end=end_date,
                         interval=interval,
-                        progress=False,  # Turn off progress output
-                        timeout=timeout  # Increase timeout for Railway
+                        progress=False,
+                        prepost=False,
+                        repair=True,
+                        auto_adjust=False,  # Keep split/dividend adjustments off
+                        timeout=10  # 10 second timeout instead of 30
                     )
                     
                     if df is None:
-                        logger.warning(f"[Yahoo] Direct download returned None for {symbol}")
+                        logger.warning(f"[Yahoo] Download returned None for {symbol}")
                     elif df.empty:
-                        logger.warning(f"[Yahoo] Direct download returned empty DataFrame for {symbol}")
+                        logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
                     else:
-                        logger.info(f"[Yahoo] Direct download successful for {symbol}, got {len(df)} rows")
-                        logger.info(f"[Yahoo] DataFrame columns: {df.columns.tolist()}")
+                        logger.info(f"[Yahoo] Download successful for {symbol}, got {len(df)} rows")
+                        return df
+                        
+                except Exception as download_e:
+                    logger.warning(f"[Yahoo] Download exception: {str(download_e)}")
+                    logger.warning(f"[Yahoo] Error type: {type(download_e).__name__}")
                     
-                except Exception as direct_e:
-                    logger.error(f"[Yahoo] Direct download exception: {str(direct_e)}")
-                    logger.error(f"[Yahoo] Error type: {type(direct_e).__name__}")
-                    df = None
+                    # For "CL=F" (oil) and related, fail faster
+                    if symbol in ["CL=F", "BZ=F", "NG=F"] or (original_symbol and original_symbol in ["XTIUSD", "WTIUSD", "USOIL"]):
+                        logger.warning(f"[Yahoo] Oil-related symbol detected, failing faster: {symbol}")
+                        return None
                 
-                # If direct download failed, try the Ticker method
-                if df is None or df.empty:
-                    logger.info(f"[Yahoo] Direct download failed for {symbol}, trying Ticker method")
-                    try:
-                        ticker = yf.Ticker(symbol, session=session)
-                        logger.info(f"[Yahoo] Created Ticker object for {symbol}")
+                # If download method fails, try ticker method (usually more robust for some symbols)
+                # But this requires a Ticker object which is slower to initialize
+                try:
+                    ticker = yf.Ticker(symbol)
+                    logger.info(f"[Yahoo] Using ticker.history for {symbol}")
+                    
+                    # Get historical data with the ticker
+                    df = ticker.history(
+                        start=start_date,
+                        end=end_date,
+                        interval=interval,
+                        prepost=False,
+                        auto_adjust=False,  # Keep split/dividend adjustments off
+                    )
+                    
+                    if df is None:
+                        logger.warning(f"[Yahoo] Ticker method returned None for {symbol}")
+                    elif df.empty:
+                        logger.warning(f"[Yahoo] Ticker method returned empty DataFrame for {symbol}")
+                    else:
+                        logger.info(f"[Yahoo] Ticker method successful for {symbol}, got {len(df)} rows")
+                        logger.info(f"[Yahoo] DataFrame columns: {df.columns.tolist()}")
                         
-                        # Try to get some ticker info to check if it's valid
-                        try:
-                            info_keys = list(ticker.info.keys())[:5] if hasattr(ticker, 'info') and ticker.info else []
-                            logger.info(f"[Yahoo] Ticker info available: {len(info_keys)} keys")
-                        except Exception as info_e:
-                            logger.warning(f"[Yahoo] Could not retrieve ticker info: {str(info_e)}")
-                        
-                        # Get history
-                        logger.info(f"[Yahoo] Getting history for {symbol} with Ticker method")
-                        df = ticker.history(
-                            start=start_date,
-                            end=end_date,
-                            interval=interval
-                        )
-                        
-                        if df is None:
-                            logger.warning(f"[Yahoo] Ticker method returned None for {symbol}")
-                        elif df.empty:
-                            logger.warning(f"[Yahoo] Ticker method returned empty DataFrame for {symbol}")
-                        else:
-                            logger.info(f"[Yahoo] Ticker method successful for {symbol}, got {len(df)} rows")
-                            logger.info(f"[Yahoo] DataFrame columns: {df.columns.tolist()}")
-                            
-                    except Exception as ticker_e:
-                        logger.error(f"[Yahoo] Ticker method exception: {str(ticker_e)}")
-                        logger.error(f"[Yahoo] Error type: {type(ticker_e).__name__}")
-                        df = None
+                except Exception as ticker_e:
+                    logger.error(f"[Yahoo] Ticker method exception: {str(ticker_e)}")
+                    logger.error(f"[Yahoo] Error type: {type(ticker_e).__name__}")
+                    df = None
                 
                 # If yfinance methods all failed, throw an exception
                 if df is None or df.empty:
