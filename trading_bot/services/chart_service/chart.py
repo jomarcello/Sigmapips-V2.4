@@ -1912,7 +1912,7 @@ class ChartService:
             # Map to correct Yahoo Finance symbol
             yahoo_symbols = {
                 "XAUUSD": "GC=F",   # Gold futures
-                "XAGUSD": "SI=F",    # Silver futures
+                "XAGUSD": "SI=F",    # Silver futures - Corrected back to SI=F which is the correct Yahoo Finance symbol
                 "XTIUSD": "CL=F",    # Crude Oil WTI futures
                 "WTIUSD": "CL=F",    # WTI Crude Oil futures (alternative)
                 "XBRUSD": "BZ=F",    # Brent Crude Oil futures
