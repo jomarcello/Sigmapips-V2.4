@@ -70,10 +70,10 @@ class ChartService:
             self.chart_links = {
                 # Commodities
                 "XAUUSD": "https://www.tradingview.com/chart/bylCuCgc/",
-                "XTIUSD": "https://www.tradingview.com/chart/jxU29rbq/",
+                "XTIUSD": "https://www.tradingview.com/chart/zmsuvPgj/",  # Bijgewerkte link voor Oil
                 
                 # Currencies
-                "EURUSD": "https://www.tradingview.com/chart/xknpxpcr/",
+                "EURUSD": "https://www.tradingview.com/chart/zmsuvPgj/",  # Bijgewerkte link voor EURUSD
                 "EURGBP": "https://www.tradingview.com/chart/xt6LdUUi/",
                 "EURCHF": "https://www.tradingview.com/chart/4Jr8hVba/",
                 "EURJPY": "https://www.tradingview.com/chart/ume7H7lm/",
@@ -1106,7 +1106,7 @@ class ChartService:
                     
                     analysis_text += f"Price is currently trading near current price of {formatted_price}, "
                 elif instrument == "US100":
-                    # Format US100 prices with comma after second digit
+                    # Format US100 price with comma after second digit
                     price_digits = str(int(current_price))
                     formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
                     
@@ -2010,36 +2010,79 @@ class ChartService:
             # Verwijder deze waarschuwing, we weten dat het een geldige ID is
             logger.info(f"Session ID length: {len(session_id)} characters")
             
-            # Find predefined chart URL if available
+            # Normaliseer het instrument voor consistente lookup
             instrument_upper = instrument.upper()
             
-            # Main chart URL for EURUSD (full featured)
-            if instrument_upper == 'EURUSD':
-                base_url = "https://www.tradingview.com/chart/xknpxpcr/"
+            # Controleer of we een voorgedefinieerde URL hebben in self.chart_links
+            if instrument_upper in self.chart_links:
+                base_url = self.chart_links[instrument_upper]
+                logger.info(f"Found predefined chart URL for {instrument_upper}: {base_url}")
+                
+                # Voeg timeframe en session ID toe aan de URL
                 params = {
                     'timeframe': timeframe,
                     'session': session_id
                 }
                 param_string = "&".join([f"{k}={v}" for k, v in params.items()])
                 url = f"{base_url}?{param_string}" 
-                logger.info(f"Built TradingView URL for {instrument}: {url}")
+                logger.info(f"Built complete TradingView URL for {instrument}: {url}")
                 return url
+            
+            # Als er geen voorgedefinieerde URL is, val terug op de generieke methode
+            logger.warning(f"No predefined chart URL found for {instrument_upper}, using generic method")
             
             # Use layout ID for other instruments
             layout_id = 'xknpxpcr'
             
             # Format symbol correctly based on type
+            # Commodity mapping
+            commodity_map = {
+                "XAUUSD": "COMEX:GC1!",  # Gold futures
+                "XAGUSD": "COMEX:SI1!",  # Silver futures
+                "XTIUSD": "NYMEX:CL1!",  # WTI Crude Oil futures
+                "WTIUSD": "NYMEX:CL1!",  # WTI Crude Oil (alternative)
+                "XBRUSD": "TVC:UKOIL",   # Brent Crude Oil
+                "XPDUSD": "NYMEX:PA1!",  # Palladium futures
+                "XPTUSD": "NYMEX:PL1!",  # Platinum futures
+                "NATGAS": "NYMEX:NG1!",  # Natural Gas futures
+                "COPPER": "COMEX:HG1!",  # Copper futures
+                "USOIL": "NYMEX:CL1!",   # US Oil (same as WTI)
+            }
+            
+            # Indices mapping
+            indices_map = {
+                "US30": "DJ:DJI",      # Dow Jones
+                "US500": "SP:SPX",     # S&P 500
+                "US100": "NASDAQ:NDX", # Nasdaq 100
+                "UK100": "FOREXCOM:UK100",  # FTSE 100
+                "DE40": "FOREXCOM:GER40",   # DAX
+                "JP225": "IDX:NKY",    # Nikkei 225
+                "AU200": "ASX:XJO",    # ASX 200
+            }
+
+            # Check if it's a commodity
+            if instrument_upper in commodity_map:
+                symbol = commodity_map[instrument_upper]
+                logger.info(f"Formatted commodity {instrument_upper} as {symbol} for TradingView")
+            # Check if it's an index
+            elif instrument_upper in indices_map:
+                symbol = indices_map[instrument_upper]
+                logger.info(f"Formatted index {instrument_upper} as {symbol} for TradingView")
             # Check if it looks like a crypto pair (e.g., ends in USD or USDT)
-            is_crypto = instrument_upper.endswith("USD") or instrument_upper.endswith("USDT")
-            if is_crypto and len(instrument_upper) > 3: # Basic check
-                 # Attempt to format as BINANCE:SYMBOL (assuming USDT pair is preferred by Binance)
-                 base_symbol = instrument_upper.replace("USDT", "").replace("USD", "")
-                 # Ensure it ends with USDT for the Binance ticker lookup
-                 symbol = f"BINANCE:{base_symbol}USDT"
+            elif (instrument_upper.endswith("USD") or instrument_upper.endswith("USDT")) and len(instrument_upper) > 3 and not len(instrument_upper) == 6:
+                # Attempt to format as BINANCE:SYMBOL (assuming USDT pair is preferred by Binance)
+                base_symbol = instrument_upper.replace("USDT", "").replace("USD", "")
+                # Ensure it ends with USDT for the Binance ticker lookup
+                symbol = f"BINANCE:{base_symbol}USDT"
+                logger.info(f"Formatted crypto {instrument_upper} as {symbol} for TradingView")
+            # Forex pair handling
             elif len(instrument_upper) == 6 and all(c.isalpha() for c in instrument_upper):
-                 symbol = f"FX:{instrument_upper}" # Forex pair
+                symbol = f"FX:{instrument_upper}" # Forex pair
+                logger.info(f"Formatted forex {instrument_upper} as {symbol} for TradingView")
             else:
-                 symbol = instrument_upper # Default to the normalized instrument name for indices/commodities
+                # Default to the normalized instrument name
+                symbol = instrument_upper 
+                logger.info(f"Using default format for {instrument_upper}: {symbol}")
 
             # Build URL
             base_url = f"https://www.tradingview.com/chart/{layout_id}/"
@@ -2051,6 +2094,7 @@ class ChartService:
             param_string = "&".join([f"{k}={v}" for k, v in params.items()])
             url = f"{base_url}?{param_string}"
             
+            logger.info(f"Built TradingView URL with generic method: {url}")
             return url
             
         except Exception as e:
