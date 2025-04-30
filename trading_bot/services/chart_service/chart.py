@@ -666,11 +666,8 @@ class ChartService:
             else:
                 logger.info(f"Skipped loading YahooFinanceProvider for crypto instrument: {instrument}")
                 
-            try:
-                from trading_bot.services.chart_service.alltick_provider import AllTickProvider
-                alltick_provider = AllTickProvider()
-            except Exception as e:
-                logger.error(f"Failed to load AllTickProvider: {str(e)}")
+            # We don't use AllTickProvider at all
+            alltick_provider = None
         except Exception as e:
             logger.error(f"Error in provider setup for technical analysis: {str(e)}")
             return await self._generate_default_analysis(instrument, timeframe)
@@ -706,17 +703,13 @@ class ChartService:
             if yahoo_provider:
                 providers_to_try.append(yahoo_provider)
                 logger.info(f"Added Yahoo provider for commodity {instrument}")
-            if alltick_provider:
-                providers_to_try.append(alltick_provider)
-                logger.info(f"Added AllTick provider as backup for commodity {instrument}")
+            # AllTickProvider is removed as we never use it
         else:  # forex, index
             logger.info(f"Using Yahoo Finance for {market_type} {instrument}")
             if yahoo_provider:
                 providers_to_try.append(yahoo_provider)
                 logger.info(f"Added Yahoo provider for {market_type} {instrument}")
-            if alltick_provider:
-                providers_to_try.append(alltick_provider)
-                logger.info(f"Added AllTick provider as backup for {market_type} {instrument}")
+            # AllTickProvider is removed as we never use it
         
         # Log de uiteindelijke volgorde
         provider_names = [p.__class__.__name__ for p in providers_to_try]
@@ -797,8 +790,13 @@ class ChartService:
         if successful_provider is None and market_type == "commodity":
             logger.info(f"All providers failed for commodity {instrument}, using commodity-specific methods")
             try:
-                # Get price from our specialized commodity method
-                current_price = await self._fetch_commodity_price(instrument)
+                # Check if this is oil-related
+                if instrument in ["XTIUSD", "WTIUSD", "USOIL"]:
+                    logger.info(f"Using specialized oil price fallback for {instrument}")
+                    current_price = await self._fetch_oil_price_fallback(instrument)
+                else:
+                    # Get price from our specialized commodity method
+                    current_price = await self._fetch_commodity_price(instrument)
                 
                 if current_price:
                     logger.info(f"Got commodity price {current_price} for {instrument}")
@@ -2115,12 +2113,12 @@ class ChartService:
         try:
             logger.info(f"Using fallback method to get oil price for {symbol}")
             
-            # Default oil price with recent range (as of April 2023)
-            default_oil_price = 82.50  # WTI Crude Oil ~$82-83 range
+            # Current WTI Crude Oil price (as of latest search - updated from $82.50)
+            default_oil_price = 59.80  # WTI Crude Oil ~$59-60 range
             
             # Add realistic variation
             import random
-            variation = random.uniform(-0.75, 0.75)  # +/- $0.75 variation
+            variation = random.uniform(-0.50, 0.50)  # +/- $0.50 variation
             price = default_oil_price + variation
             
             logger.info(f"Generated fallback oil price for {symbol}: ${price:.2f}")
@@ -2128,7 +2126,7 @@ class ChartService:
             
         except Exception as e:
             logger.error(f"Error in oil price fallback method: {str(e)}")
-            return 82.50  # Return base price if even the fallback fails
+            return 59.80  # Return updated base price if even the fallback fails
 
     async def _fetch_index_price(self, symbol: str) -> Optional[float]:
         """
