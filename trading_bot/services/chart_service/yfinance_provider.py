@@ -678,13 +678,7 @@ class YahooFinanceProvider:
         """Format instrument symbol for Yahoo Finance API"""
         instrument = instrument.upper().replace("/", "")
         
-        # For forex (EURUSD -> EUR=X)
-        if len(instrument) == 6 and all(c.isalpha() for c in instrument):
-            base = instrument[:3]
-            quote = instrument[3:]
-            return f"{base}{quote}=X"
-            
-        # For commodities - using correct futures contract symbols
+        # For commodities - using correct futures contract symbols (moet EERST worden uitgevoerd)
         if instrument == "XAUUSD":
             return "GC=F"  # Gold futures
         elif instrument == "XAGUSD":
@@ -717,6 +711,12 @@ class YahooFinanceProvider:
                 "HK50": "^HSI"      # Hang Seng
             }
             return indices_map.get(instrument, instrument)
+            
+        # For forex (EURUSD -> EUR=X) - MOET NA de commodity checks komen
+        if len(instrument) == 6 and all(c.isalpha() for c in instrument):
+            base = instrument[:3]
+            quote = instrument[3:]
+            return f"{base}{quote}=X"
                 
         # Default: return as is
         return instrument 
