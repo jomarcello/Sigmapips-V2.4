@@ -1055,6 +1055,12 @@ class ChartService:
                             parts = price_str.split('.')
                             formatted_integer = f"{int(parts[0]):,}"
                             return f"{formatted_integer}.{parts[1]}"
+                        # XRP specifiek formaat met 5 decimalen
+                        elif "XRP" in instrument:
+                            price_str = f"{price:.5f}"
+                            parts = price_str.split('.')
+                            formatted_integer = f"{int(parts[0]):,}"
+                            return f"{formatted_integer}.{parts[1]}"
                         # Lower value coins (<100) - format with 2 decimal places
                         else:
                             price_str = f"{price:.2f}"
@@ -1089,42 +1095,22 @@ class ChartService:
 
                 elif instrument == "US30":
                     # Format US30 prices with comma after second digit
-                    def format_us30(price):
-                        price_str = f"{price:.2f}"
-                        parts = price_str.split('.')
-                        digits = parts[0]
-                        return f"{digits[:2]},{digits[2:]}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_us30(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_us30(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_us30(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_us30(weekly_low)}\n\n"
-
+                    price_digits = str(int(current_price))
+                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
+                    
+                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
                 elif instrument == "US500":
                     # Format US500 prices with comma after first digit
-                    def format_us500(price):
-                        price_str = f"{price:.2f}"
-                        parts = price_str.split('.')
-                        digits = parts[0]
-                        return f"{digits[0]},{digits[1:]}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_us500(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_us500(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_us500(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_us500(weekly_low)}\n\n"
-
+                    price_digits = str(int(current_price))
+                    formatted_price = f"{price_digits[0]},{price_digits[1:]}.{f'{current_price:.2f}'.split('.')[1]}"
+                    
+                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
                 elif instrument == "US100":
                     # Format US100 prices with comma after second digit
-                    def format_us100(price):
-                        price_str = f"{price:.2f}"
-                        parts = price_str.split('.')
-                        digits = parts[0]
-                        return f"{digits[:2]},{digits[2:]}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_us100(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_us100(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_us100(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_us100(weekly_low)}\n\n"
+                    price_digits = str(int(current_price))
+                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
+                    
+                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
                 elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
                     # Format cryptocurrency prices based on their value
                     def format_crypto(price):
@@ -1135,6 +1121,12 @@ class ChartService:
                         # Medium value coins (100-9999) - format with 1 decimal place
                         elif price >= 100:
                             price_str = f"{price:.1f}"
+                            parts = price_str.split('.')
+                            formatted_integer = f"{int(parts[0]):,}"
+                            return f"{formatted_integer}.{parts[1]}"
+                        # XRP specifiek formaat met 5 decimalen
+                        elif "XRP" in instrument:
+                            price_str = f"{price:.5f}"
                             parts = price_str.split('.')
                             formatted_integer = f"{int(parts[0]):,}"
                             return f"{formatted_integer}.{parts[1]}"
@@ -1522,7 +1514,7 @@ class ChartService:
             zone_stars = "★" * zone_strength + "☆" * (5 - zone_strength)
             
             # Determine the appropriate price formatting based on instrument type
-            if any(crypto in instrument for crypto in ["BTC", "ETH", "LTC", "XRP"]):
+            if any(crypto in instrument for crypto in ["BTC", "ETH", "LTC", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
                 if instrument == "BTCUSD":
                     # Bitcoin usually shows fewer decimal places
                     precision = 2
@@ -1588,7 +1580,7 @@ class ChartService:
                 
                 analysis_text += f"Price is currently trading near current price of {formatted_price}, "
             elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
-                # Format cryptocurrency price using the format_crypto function
+                # Format cryptocurrency prices based on their value
                 def format_crypto(price):
                     # Bitcoin and high-value coins (>10000) - format with whole numbers
                     if price > 10000:
@@ -1600,13 +1592,19 @@ class ChartService:
                         parts = price_str.split('.')
                         formatted_integer = f"{int(parts[0]):,}"
                         return f"{formatted_integer}.{parts[1]}"
+                    # XRP specifiek formaat met 5 decimalen
+                    elif "XRP" in instrument:
+                        price_str = f"{price:.5f}"
+                        parts = price_str.split('.')
+                        formatted_integer = f"{int(parts[0]):,}"
+                        return f"{formatted_integer}.{parts[1]}"
                     # Lower value coins (<100) - format with 2 decimal places
                     else:
                         price_str = f"{price:.2f}"
                         parts = price_str.split('.')
                         formatted_integer = f"{int(parts[0]):,}"
                         return f"{formatted_integer}.{parts[1]}"
-                
+
                 formatted_price = format_crypto(current_price)
                 analysis_text += f"Price is currently trading near current price of {formatted_price}, "
             else:
@@ -2197,6 +2195,10 @@ class ChartService:
         # Detect market type
         market_type = "crypto"  # Default to crypto if we can't run the async method
         
+        # XRP uses 5 decimal places
+        if "XRP" in instrument:
+            return 5  # XRP specifieke precisie voor meer decimalen
+            
         # Bitcoin and major cryptos
         if instrument in ["BTCUSD", "BTCUSDT"]:
             return 2  # Bitcoin usually displayed with 2 decimal places
@@ -2263,7 +2265,7 @@ class ChartService:
             crypto_defaults = {
                 "BTC": 66500,   # Updated Bitcoin price
                 "ETH": 3200,    # Updated Ethereum price
-                "XRP": 0.50,    # Updated XRP price
+                "XRP": 2.25,    # Updated XRP price (2023-04-30)
                 "SOL": 150,     # Updated Solana price
                 "BNB": 550,     # Updated BNB price 
                 "ADA": 0.45,    # Updated Cardano price
