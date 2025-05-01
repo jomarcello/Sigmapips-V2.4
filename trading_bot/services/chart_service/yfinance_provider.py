@@ -472,6 +472,11 @@ class YahooFinanceProvider:
                 
                 if df is not None and not df.empty:
                     break
+                
+                # Check if we've been rate limited
+                if YahooFinanceProvider._rate_limit_hits > 3:
+                    logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
+                    time.sleep(30)  # Wait 30 seconds before trying next method
             
             # If that failed, try with yf.download (with extra retries)
             if df is None or df.empty:
@@ -487,8 +492,8 @@ class YahooFinanceProvider:
                     
                     # Check if we've been rate limited
                     if YahooFinanceProvider._rate_limit_hits > 3:
-                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will use fallback data")
-                        rate_limit_error = True
+                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
+                        time.sleep(30)  # Wait 30 seconds before trying next method
             
             # If still no data, try with alternative symbols for certain instruments
             if (df is None or df.empty) and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
@@ -513,33 +518,13 @@ class YahooFinanceProvider:
                     
                     # Check if we've been rate limited
                     if YahooFinanceProvider._rate_limit_hits > 3:
-                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {symbol}, will use fallback data")
-                        rate_limit_error = True
-                        break
+                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {symbol}, will wait longer")
+                        time.sleep(30)  # Wait 30 seconds before trying next alternative
             
-            # If still no data or rate limited, generate fallback data
-            if (df is None or df.empty) or rate_limit_error:
-                logger.info(f"[Yahoo] Using fallback data generation for {symbol} with timeframe {timeframe}")
-                df = YahooFinanceProvider._generate_fallback_data(symbol, timeframe, limit or 100)
-                
-                # If we successfully generated fallback data, process it and return
-                if df is not None and not df.empty:
-                    logger.info(f"[Yahoo] Successfully generated fallback data for {symbol}")
-                    
-                    # Process the fallback data
-                    processed_df = df.copy()
-                    
-                    # Ensure the limit is applied
-                    if limit and len(processed_df) > limit:
-                        processed_df = processed_df.tail(limit)
-                    
-                    # Extract indicators from the fallback data
-                    indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
-                    
-                    return processed_df, indicators
-                else:
-                    logger.error(f"[Yahoo] Failed to generate fallback data for {symbol}")
-                    return pd.DataFrame(), {"error": "data_not_available", "message": f"Could not retrieve data for {symbol}"}
+            # If still no data, return an error
+            if df is None or df.empty:
+                logger.error(f"[Yahoo] Failed to get data for {yahoo_symbol} with timeframe {timeframe}")
+                return None, {"error": "data_not_available", "message": f"Could not retrieve data for {symbol}"}
             
             # Process the data for our needs
             processed_df = YahooFinanceProvider._process_dataframe(df, yahoo_symbol)
@@ -567,50 +552,21 @@ class YahooFinanceProvider:
                 )
                 logger.error(error_message)
                 
-                # Generate fallback data instead of returning an error
-                logger.info(f"[Yahoo] Using fallback data after connection error for {symbol}")
-                df = YahooFinanceProvider._generate_fallback_data(symbol, timeframe, limit or 100)
-                
-                if df is not None and not df.empty:
-                    processed_df = df.copy()
-                    indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
-                    return processed_df, indicators
-                
-                # If fallback generation failed, return the error
+                # Return an error instead of fallback data
                 return pd.DataFrame(), {"error": "connectivity", "message": error_message}
             
             # Handle rate limiting specifically
             elif YahooFinanceProvider._is_rate_limit_error(e):
                 YahooFinanceProvider._handle_rate_limit_error()
-                logger.warning(f"[Yahoo] Rate limit detected during data fetch for {symbol}, using fallback data")
+                logger.error(f"[Yahoo] Rate limit detected during data fetch for {symbol}")
                 
-                # Generate fallback data instead of returning an error
-                df = YahooFinanceProvider._generate_fallback_data(symbol, timeframe, limit or 100)
-                
-                if df is not None and not df.empty:
-                    processed_df = df.copy()
-                    indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
-                    return processed_df, indicators
-                
-                # If fallback generation failed, return the error
+                # Return an error instead of fallback data
                 return pd.DataFrame(), {"error": "rate_limit", "message": f"Rate limit exceeded for {symbol}"}
             
             else:
                 logger.exception(f"[Yahoo] Error fetching market data for {symbol} with timeframe {timeframe}: {str(e)}")
                 
-                # Try fallback data as a last resort
-                try:
-                    logger.info(f"[Yahoo] Attempting fallback data after general error for {symbol}")
-                    df = YahooFinanceProvider._generate_fallback_data(symbol, timeframe, limit or 100)
-                    
-                    if df is not None and not df.empty:
-                        processed_df = df.copy()
-                        indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
-                        return processed_df, indicators
-                except Exception as fallback_error:
-                    logger.error(f"[Yahoo] Failed to generate fallback data: {str(fallback_error)}")
-                
-                # Return an empty DataFrame and error info if all else fails
+                # Return an error instead of fallback data
                 return pd.DataFrame(), {"error": "unknown", "message": str(e)}
 
     @staticmethod
