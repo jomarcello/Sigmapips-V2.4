@@ -511,11 +511,8 @@ class YahooFinanceProvider:
                 indicators['MACD_signal'] = float(df['MACD_signal'].iloc[-1].iloc[0]) if isinstance(df['MACD_signal'].iloc[-1], pd.Series) else float(df['MACD_signal'].iloc[-1])
                 indicators['MACD_hist'] = indicators['MACD'] - indicators['MACD_signal']
             
-            # Store indicators as an attribute of the DataFrame
-            result.indicators = indicators
-            
-            logger.info(f"[Yahoo] Successfully processed data for {symbol}, returned {len(result)} rows")
-            return result
+            # Store indicators in a separate dictionary and return both data and indicators
+            return result, indicators
             
         except Exception as e:
             logger.error(f"[Yahoo] Error getting market data: {str(e)}")
