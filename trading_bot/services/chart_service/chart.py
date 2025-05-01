@@ -22,7 +22,6 @@ import traceback
 import re
 import glob
 import tempfile
-from PIL import Image, ImageDraw, ImageFont
 
 # Importeer alleen de base class
 from trading_bot.services.chart_service.base import TradingViewService
@@ -273,49 +272,12 @@ class ChartService:
     async def _fallback_chart(self, instrument, timeframe="1h"):
         """Fallback method to get chart"""
         try:
-            # Create and return a simple image with text instead of trying to run a coroutine
-            # This avoids the "asyncio.run() cannot be called from a running event loop" error
-            import io
-            from PIL import Image, ImageDraw, ImageFont
-            
-            # Create a simple image with text
-            width, height = 800, 600
-            image = Image.new('RGB', (width, height), color=(40, 40, 40))
-            draw = ImageDraw.Draw(image)
-            
-            # Add text
-            text = f"Chart for {instrument} unavailable"
-            try:
-                # Try to use a system font
-                font = ImageFont.truetype("Arial", 36)
-            except:
-                # Fall back to default font
-                font = ImageFont.load_default()
-                
-            # Calculate text position
-            text_width = draw.textlength(text, font=font)
-            text_position = ((width - text_width) / 2, height / 2)
-            
-            # Draw text
-            draw.text(text_position, text, fill=(255, 255, 255), font=font)
-            
-            # Add additional info
-            info_text = "Please try again later"
-            info_text_width = draw.textlength(info_text, font=font)
-            info_position = ((width - info_text_width) / 2, height / 2 + 60)
-            draw.text(info_position, info_text, fill=(200, 200, 200), font=font)
-            
-            # Convert to bytes
-            buf = io.BytesIO()
-            image.save(buf, format='PNG')
-            buf.seek(0)
-            
-            return buf.getvalue()
+            # Genereer een chart met matplotlib
+            return await self._generate_random_chart(instrument, timeframe)
             
         except Exception as e:
-            logger.error(f"Error in fallback chart: {str(e)}")
-            # Return an empty byte array if everything fails
-            return b''
+            logging.error(f"Error in fallback chart: {str(e)}")
+            return None
 
     async def generate_chart(self, instrument, timeframe="1h"):
         """Alias for get_chart for backward compatibility"""
@@ -352,49 +314,13 @@ class ChartService:
         try:
             logger.warning(f"Using fallback chart for {instrument}")
             
-            # Create and return a simple image with text instead of trying to run a coroutine
-            # This avoids the "asyncio.run() cannot be called from a running event loop" error
-            import io
-            from PIL import Image, ImageDraw, ImageFont
-            
-            # Create a simple image with text
-            width, height = 800, 600
-            image = Image.new('RGB', (width, height), color=(40, 40, 40))
-            draw = ImageDraw.Draw(image)
-            
-            # Add text
-            text = f"Chart for {instrument} unavailable"
-            try:
-                # Try to use a system font
-                font = ImageFont.truetype("Arial", 36)
-            except:
-                # Fall back to default font
-                font = ImageFont.load_default()
-                
-            # Calculate text position
-            text_width = draw.textlength(text, font=font)
-            text_position = ((width - text_width) / 2, height / 2)
-            
-            # Draw text
-            draw.text(text_position, text, fill=(255, 255, 255), font=font)
-            
-            # Add additional info
-            info_text = "Please try again later"
-            info_text_width = draw.textlength(info_text, font=font)
-            info_position = ((width - info_text_width) / 2, height / 2 + 60)
-            draw.text(info_position, info_text, fill=(200, 200, 200), font=font)
-            
-            # Convert to bytes
-            buf = io.BytesIO()
-            image.save(buf, format='PNG')
-            buf.seek(0)
-            
-            return buf.getvalue()
+            # Hier zou je een eenvoudige fallback kunnen implementeren
+            # Voor nu gebruiken we de _generate_random_chart methode
+            return asyncio.run(self._generate_random_chart(instrument, "1h"))
             
         except Exception as e:
             logger.error(f"Error in fallback chart: {str(e)}")
-            # Return an empty byte array if everything fails
-            return b''
+            return None
             
     async def _calculate_rsi(self, prices, period=14):
         """Calculate RSI indicator"""
@@ -704,18 +630,21 @@ class ChartService:
             market_type = await self._detect_market_type(instrument)
             logger.info(f"Detected market type: {market_type} for {instrument}")
             
-            # Eerst proberen cryptocurrency price via Binance, als het een crypto-instrument is
+            # Use appropriate providers based on market type
             if market_type == 'crypto':
-                logger.info(f"Attempting to get data for crypto instrument {instrument} from Binance")
-                
+                # For crypto, we prefer to use the Binance provider
+                logger.info(f"Using Binance provider for crypto instrument {instrument}")
                 for provider in self.chart_providers:
                     if isinstance(provider, BinanceProvider):
                         try:
-                            logger.info(f"Using BinanceProvider for {instrument}")
+                            # Most crypto charts will be analyzed via the price data from Binance
+                            logger.info(f"Getting analysis from Binance for {instrument}")
+                            # NOTE: BinanceProvider uses get_market_data, not get_price_data
                             result = await provider.get_market_data(instrument, timeframe)
                             
                             if result is not None:
                                 logger.info(f"Successfully got data from Binance for {instrument}")
+                                # BinanceProvider returns a named tuple with 'indicators'
                                 analysis = await self._analyze_market_data(instrument, timeframe, result.indicators, market_type)
                                 
                                 # Cache the analysis
@@ -744,13 +673,13 @@ class ChartService:
                 if market_type == 'commodity' and not isinstance(provider, YahooFinanceProvider):
                     logger.info(f"Skipping non-Yahoo provider for commodity {instrument}")
                     continue
-                     
+                
                 try:
                     logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                     
                     # Handle each provider according to its interface
                     if isinstance(provider, YahooFinanceProvider):
-                        price_data, info = await provider.get_market_data(instrument, timeframe)
+                        price_data, info = provider.get_market_data(instrument, timeframe)
                         
                         # Check if we got valid data
                         if price_data is not None and not price_data.empty:
@@ -857,7 +786,7 @@ class ChartService:
                     for provider in self.chart_providers:
                         if isinstance(provider, YahooFinanceProvider):
                             # Get market data returns a tuple (DataFrame, info_dict)
-                            price_data, info = await provider.get_market_data(yahoo_symbol, timeframe)
+                            price_data, info = provider.get_market_data(yahoo_symbol, timeframe)
                             
                             if price_data is not None and not price_data.empty:
                                 logger.info(f"Successfully got data from Yahoo for {yahoo_symbol}")
@@ -925,103 +854,6 @@ class ChartService:
             
             # Return a very basic analysis if everything fails
             return f"Technical analysis for {instrument} ({timeframe}) is currently unavailable. Please try again later."
-
-    async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
-        """
-        Generate a default technical analysis when data fetching fails
-        
-        Args:
-            instrument: The trading instrument to analyze
-            timeframe: The timeframe for analysis
-            
-        Returns:
-            str: Basic technical analysis text
-        """
-        try:
-            # Try to get the current price if possible
-            logger.info(f"Generating default analysis for {instrument} on {timeframe}")
-            price = None
-            market_type = await self._detect_market_type(instrument)
-            
-            if market_type == 'crypto':
-                price = await self._fetch_crypto_price(instrument)
-            elif market_type == 'forex':
-                # For forex pairs, we could get a default price from a simple API
-                # For now, use a placeholder
-                price = None
-            
-            # Generate basic analysis text
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            header = f"📊 <b>Technical Analysis: {instrument}</b> ({timeframe})\n"
-            timestamp = f"⏱️ <i>Generated at {current_time} UTC</i>\n\n"
-            
-            if price:
-                price_info = f"💰 <b>Current Price:</b> {price}\n\n"
-            else:
-                price_info = ""
-            
-            warning = "⚠️ <b>Limited Data Available:</b> Using simplified analysis.\n\n"
-            
-            basic_analysis = (
-                f"<b>Market Type:</b> {market_type.capitalize()}\n"
-                f"<b>Timeframe:</b> {timeframe}\n\n"
-                f"Unable to load full technical indicators at this time.\n"
-                f"Please try again later for a complete analysis."
-            )
-            
-            return header + timestamp + price_info + warning + basic_analysis
-            
-        except Exception as e:
-            logger.error(f"Error in _generate_default_analysis for {instrument}: {str(e)}")
-            return f"Technical analysis for {instrument} ({timeframe}) is currently unavailable due to a data error. Please try again later."
-
-    def get_tradingview_url(self, instrument: str, timeframe: str = '1h') -> str:
-        """Get a TradingView chart URL for a specific instrument"""
-        try:
-            # Session ID for TradingView
-            session_id = os.getenv("TRADINGVIEW_SESSION_ID", "z90l85p2anlgdwfppsrdnnfantz48z1o")
-            # Log session ID length
-            logger.info(f"Session ID length: {len(session_id)} characters")
-            
-            # Find predefined chart URL if available
-            instrument_upper = instrument.upper()
-            
-            # Main chart URL for EURUSD (full featured)
-            if instrument_upper == 'EURUSD':
-                base_url = "https://www.tradingview.com/chart/xknpxpcr/"
-                params = {
-                    'timeframe': timeframe,
-                    'session': session_id
-                }
-                param_string = "&".join([f"{k}={v}" for k, v in params.items()])
-                url = f"{base_url}?{param_string}" 
-                logger.info(f"Built TradingView URL for {instrument}: {url}")
-                return url
-            
-            # Use layout ID for other instruments
-            layout_id = 'xknpxpcr'
-            
-            # Format symbol correctly based on type
-            symbol = f"FX:{instrument_upper}" if len(instrument_upper) == 6 and all(c.isalpha() for c in instrument_upper) else instrument_upper
-            
-            # Build URL
-            base_url = f"https://www.tradingview.com/chart/{layout_id}/"
-            params = {
-                'symbol': symbol,
-                'timeframe': timeframe,
-                'session': session_id
-            }
-            param_string = "&".join([f"{k}={v}" for k, v in params.items()])
-            url = f"{base_url}?{param_string}"
-            
-            return url
-            
-        except Exception as e:
-            logger.error(f"Error getting TradingView URL: {str(e)}")
-            # Fallback URL
-            fallback_url = f"https://www.tradingview.com/chart/?symbol=FX:{instrument}&timeframe={timeframe}"
-            return fallback_url
 
     def _normalize_instrument_name(self, instrument: str) -> str:
         """
