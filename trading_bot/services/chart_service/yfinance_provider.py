@@ -10,11 +10,34 @@ import random
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wait_base
 import yfinance as yf
 import functools
+from yfinance.utils import YFRateLimitError  # Import the specific error
 
 logger = logging.getLogger(__name__)
+
+# Retry strategy for general errors
+retry_general = dict(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
+
+# Specific retry strategy for rate limit errors
+retry_rate_limit = dict(
+    stop=stop_after_attempt(4),  # Allow more attempts for rate limits
+    wait=wait_base(30),  # Wait a fixed 30 seconds for rate limits
+    reraise=True
+)
+
+# List of user agents to rotate
+user_agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'
+]
 
 class YahooFinanceProvider:
     """Provider class for Yahoo Finance API integration"""
@@ -23,7 +46,7 @@ class YahooFinanceProvider:
     _cache = {}
     _cache_timeout = 3600  # Cache timeout in seconds (1 hour)
     _last_api_call = 0
-    _min_delay_between_calls = 2  # Minimum delay between calls in seconds
+    _min_delay_between_calls = 2  # Minimum delay between calls in seconds (increased slightly)
     _session = None
 
     @staticmethod
@@ -33,24 +56,10 @@ class YahooFinanceProvider:
             session = requests.Session()
             
             # Rotating user agents to avoid blocking
-            user_agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11.5; rv:90.0) Gecko/20100101 Firefox/90.0',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36 Edg/92.0.902.55',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_5_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Safari/605.1.15',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_0_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
-                'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0'
-            ]
-            
             retries = Retry(
-                total=10,  # Increase from 5 to 10
-                backoff_factor=2.5,  # More aggressive backoff
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["HEAD", "GET", "POST", "OPTIONS"],
-                respect_retry_after_header=True  # Honor Retry-After headers
+                total=3, 
+                backoff_factor=0.5, 
+                status_forcelist=[429, 500, 502, 503, 504] # Include 429 for rate limits
             )
             adapter = HTTPAdapter(max_retries=retries, pool_maxsize=10, pool_connections=10)
             session.mount("http://", adapter)
@@ -61,164 +70,155 @@ class YahooFinanceProvider:
                 'User-Agent': random.choice(user_agents),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Pragma': 'no-cache',
-                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive'
             })
-            
-            # For Railway environment: try to use proxies if available
-            if os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RAILWAY_ENVIRONMENT') is not None:
+
+            # Optional: Add proxy support if needed via environment variables
+            http_proxy = os.getenv('HTTP_PROXY')
+            https_proxy = os.getenv('HTTPS_PROXY')
+            if http_proxy or https_proxy:
+                proxies = {}
                 try:
-                    # Check if HTTP_PROXY or HTTPS_PROXY environment variables are set
-                    http_proxy = os.environ.get('HTTP_PROXY')
-                    https_proxy = os.environ.get('HTTPS_PROXY')
-                    
-                    if http_proxy or https_proxy:
-                        proxies = {}
-                        if http_proxy:
-                            proxies['http'] = http_proxy
-                        if https_proxy:
-                            proxies['https'] = https_proxy
-                            
-                        session.proxies.update(proxies)
-                        logger.info(f"Using proxy settings for Yahoo Finance requests: {proxies}")
+                    if http_proxy:
+                        proxies['http'] = http_proxy
+                    if https_proxy:
+                        proxies['https'] = https_proxy
+                        
+                    session.proxies.update(proxies)
+                    logger.info(f"Using proxy settings for Yahoo Finance requests: {proxies}")
                 except Exception as e:
                     logger.error(f"Error setting up proxies: {str(e)}")
             
             YahooFinanceProvider._session = session
+            logger.info("[Yahoo] Initialized shared Requests Session with retries and rotating User-Agent")
         return YahooFinanceProvider._session
-    
+
     @staticmethod
     async def _wait_for_rate_limit():
-        """Wait if we've hit the rate limit"""
-        current_time = time.time()
-        if YahooFinanceProvider._last_api_call > 0:
-            time_since_last_call = current_time - YahooFinanceProvider._last_api_call
-            if time_since_last_call < YahooFinanceProvider._min_delay_between_calls:
-                delay = YahooFinanceProvider._min_delay_between_calls - time_since_last_call + random.uniform(0.5, 2.0)
-                logger.info(f"Rate limiting: Waiting {delay:.2f} seconds before next call")
-                await asyncio.sleep(delay)
-        
-        # Add jitter to avoid synchronized API calls
-        jitter = random.uniform(0.2, 1.0)
-        await asyncio.sleep(jitter)
-        
-        YahooFinanceProvider._last_api_call = time.time()
+        """Ensures a minimum delay between consecutive API calls."""
+        now = time.time()
+        time_since_last_call = now - YahooFinanceProvider._last_api_call
+        if time_since_last_call < YahooFinanceProvider._min_delay_between_calls:
+            wait_time = YahooFinanceProvider._min_delay_between_calls - time_since_last_call
+            logger.info(f"[Yahoo] Rate limit: waiting for {wait_time:.2f} seconds before next call.")
+            await asyncio.sleep(wait_time)
+        # Update last call time *after* waiting/checking
+        YahooFinanceProvider._last_api_call = time.time() 
 
     @staticmethod
     @retry(
-        stop=stop_after_attempt(5),  # Increase from 3 to 5 attempts
-        wait=wait_exponential(multiplier=3, min=5, max=120),  # Longer wait times: min 5s, max 120s
+        stop=stop_after_attempt(4), # Max 4 attempts total
+        wait=wait_exponential(multiplier=2, min=5, max=60), # Exponential backoff: 5s, 10s, 20s
+        retry_error_callback=lambda retry_state: logger.warning(f"[Yahoo] Retrying download for {retry_state.args[0]} (attempt {retry_state.attempt_number}), waiting {retry_state.idle_for:.2f}s. Reason: {retry_state.outcome.exception()}"),
         reraise=True
     )
     async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 30, original_symbol: str = None) -> pd.DataFrame:
         """
-        Download financial data from Yahoo Finance.
-        
-        Args:
-            symbol: The ticker symbol (e.g., AAPL, EURUSD=X)
-            start_date: Start date for the data
-            end_date: End date for the data
-            interval: Data interval (e.g., 1d, 1h)
-            timeout: Request timeout in seconds
-            original_symbol: Original symbol for reference
-            
-        Returns:
-            pd.DataFrame: DataFrame with OHLCV data
+        Downloads historical market data using yfinance library with timeout and retries.
+        Handles both yf.download and ticker.history methods.
+        Applies rate limiting waits.
         """
-        
         loop = asyncio.get_event_loop()
+        yf_symbol = YahooFinanceProvider._format_symbol(symbol)
+        session = YahooFinanceProvider._get_session() # Get session once
         
-        def download():
-            logger.info(f"[Yahoo] Downloading data for {symbol} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} with interval {interval}")
+        logger.info(f"[Yahoo] Preparing download for {symbol} ({yf_symbol}) on {interval} timeframe")
+
+        # Inner synchronous function to run in executor
+        # It includes the logic for both download and ticker.history
+        def download_sync(): 
+            df = None
+            last_exception = None
             
+            # --- First attempt: yf.download ---
             try:
-                # Reduce retries and use shorter timeout for faster response
-                import yfinance as yf
-                
-                # Set a shorter timeout for yfinance through the session
-                session = YahooFinanceProvider._get_session()
-                session.request = functools.partial(session.request, timeout=10)  # Reduce session timeout to 10 seconds
-                
-                # Try first with yfinance download method (multi-threaded)
+                logger.info(f"[Yahoo] Attempting yf.download for {yf_symbol} from {start_date.date()} to {end_date.date()} interval {interval}")
+                df = yf.download(
+                    tickers=yf_symbol,
+                    start=start_date.date(),
+                    end=end_date.date(),
+                    interval=interval,
+                    progress=False,
+                    session=session, # Use shared session
+                    timeout=timeout,
+                    ignore_tz=True
+                )
+                if df is None or df.empty:
+                    logger.warning(f"[Yahoo] yf.download returned empty DataFrame for {yf_symbol}")
+                    df = None
+                else:
+                    logger.info(f"[Yahoo] yf.download successful for {yf_symbol}, got {len(df)} rows")
+                    return df # Success, return early
+
+            except YFRateLimitError as rle:
+                logger.error(f"[Yahoo] Rate Limited during yf.download for {yf_symbol}: {rle}. Will retry if possible.")
+                last_exception = rle # Store exception and continue to ticker.history or retry
+                df = None
+            except Exception as download_e:
+                logger.warning(f"[Yahoo] yf.download failed for {yf_symbol}: {str(download_e)} type: {type(download_e).__name__}")
+                last_exception = download_e
+                df = None
+
+            # --- Second attempt: ticker.history (if yf.download failed) ---
+            if df is None:
+                logger.info(f"[Yahoo] yf.download failed or empty. Trying ticker.history for {yf_symbol}")
                 try:
-                    df = yf.download(
-                        symbol,
-                        start=start_date,
-                        end=end_date,
-                        interval=interval,
-                        progress=False,
-                        prepost=False,
-                        repair=True,
-                        auto_adjust=False,  # Keep split/dividend adjustments off
-                        timeout=10  # 10 second timeout instead of 30
-                    )
-                    
-                    if df is None:
-                        logger.warning(f"[Yahoo] Download returned None for {symbol}")
-                    elif df.empty:
-                        logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
-                    else:
-                        logger.info(f"[Yahoo] Download successful for {symbol}, got {len(df)} rows")
-                        return df
-                        
-                except Exception as download_e:
-                    logger.warning(f"[Yahoo] Download exception: {str(download_e)}")
-                    logger.warning(f"[Yahoo] Error type: {type(download_e).__name__}")
-                    
-                    # For "CL=F" (oil) and related, fail faster
-                    if symbol in ["CL=F", "BZ=F", "NG=F"] or (original_symbol and original_symbol in ["XTIUSD", "WTIUSD", "USOIL"]):
-                        logger.warning(f"[Yahoo] Oil-related symbol detected, failing faster: {symbol}")
-                        return None
-                
-                # If download method fails, try ticker method (usually more robust for some symbols)
-                # But this requires a Ticker object which is slower to initialize
-                try:
-                    ticker = yf.Ticker(symbol)
-                    logger.info(f"[Yahoo] Using ticker.history for {symbol}")
-                    
-                    # Get historical data with the ticker
+                    ticker = yf.Ticker(yf_symbol, session=session)
                     df = ticker.history(
                         start=start_date,
                         end=end_date,
                         interval=interval,
                         prepost=False,
-                        auto_adjust=False,  # Keep split/dividend adjustments off
+                        auto_adjust=False,
                     )
-                    
-                    if df is None:
-                        logger.warning(f"[Yahoo] Ticker method returned None for {symbol}")
-                    elif df.empty:
-                        logger.warning(f"[Yahoo] Ticker method returned empty DataFrame for {symbol}")
+                    if df is None or df.empty:
+                        logger.warning(f"[Yahoo] Ticker.history returned empty DataFrame for {yf_symbol}")
+                        df = None
                     else:
-                        logger.info(f"[Yahoo] Ticker method successful for {symbol}, got {len(df)} rows")
-                        logger.info(f"[Yahoo] DataFrame columns: {df.columns.tolist()}")
-                        
-                except Exception as ticker_e:
-                    logger.error(f"[Yahoo] Ticker method exception: {str(ticker_e)}")
-                    logger.error(f"[Yahoo] Error type: {type(ticker_e).__name__}")
+                        logger.info(f"[Yahoo] Ticker.history successful for {yf_symbol}, got {len(df)} rows")
+                        return df # Success
+
+                except YFRateLimitError as rle_ticker:
+                    logger.error(f"[Yahoo] Rate Limited during ticker.history for {yf_symbol}: {rle_ticker}. Will retry if possible.")
+                    last_exception = rle_ticker
                     df = None
-                
-                # If yfinance methods all failed, throw an exception
-                if df is None or df.empty:
-                    logger.warning(f"[Yahoo] All Yahoo Finance methods failed for {symbol}")
-                    raise Exception(f"No data available for {symbol} from Yahoo Finance API after trying multiple methods")
-                
-                return df
-                        
-            except Exception as e:
-                logger.error(f"[Yahoo] Error downloading data from Yahoo Finance: {str(e)}")
-                raise e
+                except Exception as ticker_e:
+                    logger.error(f"[Yahoo] Ticker.history method exception for {yf_symbol}: {str(ticker_e)} type: {type(ticker_e).__name__}")
+                    last_exception = ticker_e
+                    df = None
+            
+            # If both methods failed within this attempt, raise the last known exception
+            if df is None or df.empty:
+                logger.warning(f"[Yahoo] Both yf.download and ticker.history failed for {yf_symbol} in this attempt.")
+                if last_exception:
+                    # Raise the specific exception (e.g., YFRateLimitError) to be handled by @retry
+                    raise last_exception 
+                else:
+                    # Should not happen if attempts were made, but as a fallback
+                    error_symbol = original_symbol if original_symbol else symbol
+                    raise Exception(f"No data available for {error_symbol} ({yf_symbol}) from Yahoo Finance API after trying multiple methods")
+            
+            return df # Should be unreachable if both failed and raised
+
+        # ---> Wait before executing the synchronous download function <--- 
+        await YahooFinanceProvider._wait_for_rate_limit()
         
-        return await loop.run_in_executor(None, download)
-    
+        try:
+            # Run the synchronous download function in a thread pool executor
+            result_df = await loop.run_in_executor(None, download_sync)
+            return result_df
+        except RetryError as retry_err:
+            # Log that retries failed and re-raise the last exception caught by tenacity
+            final_exception = retry_err.last_attempt.exception()
+            logger.error(f"[Yahoo] Download failed for {symbol} ({yf_symbol}) after multiple retries. Last error: {final_exception}")
+            # Raise the specific exception captured by the retry mechanism
+            raise final_exception from retry_err
+
+        except Exception as final_e:
+            # Catch any other unexpected exception that might occur outside the download_sync or retry logic
+            logger.error(f"[Yahoo] Final unexpected error fetching data for {symbol} ({yf_symbol}): {str(final_e)} type: {type(final_e).__name__}")
+            raise final_e # Reraise the exception
+
     @staticmethod
     def _validate_and_clean_data(df: pd.DataFrame, instrument: str = None) -> pd.DataFrame:
         """
@@ -237,7 +237,10 @@ class YahooFinanceProvider:
             logger.info(f"[Validation] Starting data validation with shape: {df.shape}")
             logger.info(f"[Validation] Original columns: {df.columns}")
             logger.info(f"[Validation] Index type: {type(df.index).__name__}")
-            logger.info(f"[Validation] Index range: {df.index[0]} to {df.index[-1]}" if len(df) > 0 else "[Validation] Empty index")
+            if not df.index.empty:
+                 logger.info(f"[Validation] Index range: {df.index[0]} to {df.index[-1]}")
+            else:
+                 logger.info("[Validation] DataFrame index is empty")
             
             # Check for NaN values in the original data
             nan_counts = df.isna().sum()
