@@ -14,6 +14,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wa
 import yfinance as yf
 import functools
 import numpy as np
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +85,31 @@ class YahooFinanceProvider:
         """
         # CRITICAL FIX: Always use current date (now) as reference point
         # Get current date with time set to midnight for consistent comparison
-        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        
+        # Extra safety: Add assertions to catch programmer errors with date handling
+        try:
+            assert isinstance(start_date, datetime), f"start_date must be datetime, got {type(start_date)}"
+            assert isinstance(end_date, datetime), f"end_date must be datetime, got {type(end_date)}"
+            # More date validation
+            assert start_date.year >= 1900, f"start_date year {start_date.year} is invalid"
+            assert end_date.year >= 1900, f"end_date year {end_date.year} is invalid"
+            # Make sure dates are not in the distant future
+            assert start_date.year <= current_date.year + 1, f"start_date year {start_date.year} is too far in the future"
+            assert end_date.year <= current_date.year + 1, f"end_date year {end_date.year} is too far in the future"
+        except AssertionError as e:
+            logger.error(f"[Yahoo] Date validation error: {e}")
+            # If there's a validation error, set safe default dates
+            logger.warning("[Yahoo] Using safe default dates due to validation error")
+            end_date = current_date - timedelta(days=1)  # Yesterday
+            start_date = end_date - timedelta(days=30)   # 30 days ago
+            return start_date, end_date
         
         # Log original dates for debugging
         logger.info(f"[Yahoo] Original dates: start={start_date.strftime('%Y-%m-%d')} end={end_date.strftime('%Y-%m-%d')}")
         logger.info(f"[Yahoo] Current date: {current_date.strftime('%Y-%m-%d')}")
         
-        # If end_date is in the future, set it to yesterday
+        # If end_date is in the future or today, set it to yesterday
         if end_date >= current_date:
             logger.warning(f"[Yahoo] End date {end_date.strftime('%Y-%m-%d')} is in the future or today. Setting to yesterday.")
             end_date = current_date - timedelta(days=1)
@@ -100,6 +119,12 @@ class YahooFinanceProvider:
             # Set start_date to 30 days before end_date
             logger.warning(f"[Yahoo] Start date {start_date.strftime('%Y-%m-%d')} is invalid. Setting to 30 days before end date.")
             start_date = end_date - timedelta(days=30)
+        
+        # Final safety check - make sure start_date is before end_date with at least 1 day difference
+        if (end_date - start_date).days < 1:
+            logger.warning(f"[Yahoo] Date range too small: {(end_date - start_date).days} days. Setting to 30 day range.")
+            end_date = current_date - timedelta(days=1)  # Yesterday
+            start_date = end_date - timedelta(days=30)   # 30 days ago
         
         # Make sure dates are in correct format
         logger.info(f"[Yahoo] Corrected date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
@@ -236,14 +261,30 @@ class YahooFinanceProvider:
         """Ensures a minimum delay between consecutive API calls."""
         now = time.time()
         time_since_last_call = now - YahooFinanceProvider._last_api_call
+        
+        # Ensure a minimum delay between API calls (this is crucial to avoid 429 errors)
         if time_since_last_call < YahooFinanceProvider._min_delay_between_calls:
             wait_time = YahooFinanceProvider._min_delay_between_calls - time_since_last_call
             logger.info(f"[Yahoo] Rate limit: waiting for {wait_time:.2f} seconds before next call.")
             await asyncio.sleep(wait_time)
         
-        # IMPORTANT: Increase the delay for next API call to avoid rate limiting
-        YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 0.5, 15)
-        logger.info(f"[Yahoo] Increased minimum delay to {YahooFinanceProvider._min_delay_between_calls:.2f} seconds")
+        # Check time of day - Yahoo Finance may have different rate limits during market hours
+        # For safety, if we're during US market hours (9:30 AM - 4:00 PM ET), increase delay
+        current_time_et = datetime.now(pytz.timezone("US/Eastern"))
+        is_market_hours = (
+            9 <= current_time_et.hour <= 16 and 
+            (current_time_et.hour != 9 or current_time_et.minute >= 30) and
+            current_time_et.weekday() < 5  # Monday-Friday
+        )
+        
+        # During market hours, increase delay more aggressively
+        if is_market_hours:
+            YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 1.5, 20)
+            logger.info(f"[Yahoo] Market hours detected - increased minimum delay to {YahooFinanceProvider._min_delay_between_calls:.2f} seconds")
+        else:
+            # Outside market hours, still increase but less aggressively
+            YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 0.5, 15)
+            logger.info(f"[Yahoo] Increased minimum delay to {YahooFinanceProvider._min_delay_between_calls:.2f} seconds")
         
         # Update last call time *after* waiting/checking
         YahooFinanceProvider._last_api_call = time.time()
@@ -255,12 +296,12 @@ class YahooFinanceProvider:
 
     @staticmethod
     @retry(
-        stop=stop_after_attempt(3),  # Reduced max attempts
-        wait=wait_exponential(multiplier=2, min=10, max=60),  # Increased wait times
+        stop=stop_after_attempt(2),  # Reduced max attempts to prevent excessive rate limiting
+        wait=wait_exponential(multiplier=2, min=15, max=60),  # Increased wait times
         retry_error_callback=lambda retry_state: logger.warning(f"[Yahoo] Retrying download for {retry_state.args[0]} (attempt {retry_state.attempt_number}), waiting {retry_state.idle_for:.2f}s. Reason: {retry_state.outcome.exception()}"),
         reraise=True
     )
-    async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 30, original_symbol: str = None) -> pd.DataFrame:
+    async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 60, original_symbol: str = None) -> pd.DataFrame:
         """
         Downloads historical market data using yfinance library with timeout and retries.
         Handles both yf.download and ticker.history methods.
@@ -271,6 +312,19 @@ class YahooFinanceProvider:
         
         # Force dates to be in the past to avoid future date issues
         # Create fresh copies to avoid reference issues
+        current_time = datetime.now().replace(tzinfo=None)
+        
+        # Double check dates before calling _fix_future_dates
+        if start_date >= current_time:
+            logger.warning(f"[Yahoo] Pre-check: start_date {start_date} is >= current time! Adjusting...")
+            # Set to 30 days before end_date
+            start_date = end_date - timedelta(days=30)
+            
+        if end_date >= current_time:
+            logger.warning(f"[Yahoo] Pre-check: end_date {end_date} is >= current time! Setting to yesterday...")
+            end_date = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+        
+        # Now use the _fix_future_dates function for additional safety
         start_date, end_date = YahooFinanceProvider._fix_future_dates(
             start_date.replace(hour=0, minute=0, second=0, microsecond=0),
             end_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -321,6 +375,8 @@ class YahooFinanceProvider:
                 # Check if this is a rate limit error
                 if is_rate_limit_error(download_e):
                     logger.error(f"[Yahoo] Rate Limited during yf.download for {yf_symbol}: {download_e}. Will retry if possible.")
+                    # Sleep here to help prevent rate limiting
+                    time.sleep(random.uniform(5, 10))
                 else:
                     logger.warning(f"[Yahoo] yf.download failed for {yf_symbol}: {str(download_e)} type: {type(download_e).__name__}")
                 last_exception = download_e
@@ -333,7 +389,7 @@ class YahooFinanceProvider:
                     ticker = yf.Ticker(yf_symbol, session=session)
                     
                     # Add a short sleep to avoid hitting rate limits
-                    time.sleep(1.5)
+                    time.sleep(3)  # Increased from 1.5
                     
                     df = ticker.history(
                         start=start_date.date(),  # Use date() to ensure correct format
@@ -357,6 +413,8 @@ class YahooFinanceProvider:
                     # Check if this is a rate limit error
                     if is_rate_limit_error(ticker_e):
                         logger.error(f"[Yahoo] Rate Limited during ticker.history for {yf_symbol}: {ticker_e}. Will retry if possible.")
+                        # Sleep here to help prevent rate limiting
+                        time.sleep(random.uniform(8, 15))
                     else:
                         logger.error(f"[Yahoo] Ticker.history method exception for {yf_symbol}: {str(ticker_e)} type: {type(ticker_e).__name__}")
                     last_exception = ticker_e
@@ -367,11 +425,11 @@ class YahooFinanceProvider:
                 try:
                     logger.info(f"[Yahoo] Both methods failed. Trying with a shorter date range.")
                     
-                    # Try a shorter date range (last 7 days)
+                    # Try a shorter date range (last 7 days from end_date)
                     shorter_start = end_date - timedelta(days=7)
                     
                     # Add a short sleep to avoid hitting rate limits
-                    time.sleep(1.5)
+                    time.sleep(5)  # Increased from 1.5
                     
                     df = yf.download(
                         tickers=yf_symbol,
@@ -657,17 +715,16 @@ class YahooFinanceProvider:
         """Format instrument symbol for Yahoo Finance API"""
         instrument = instrument.upper().replace("/", "")
         
-        # For commodities - using correct futures contract symbols (moet EERST worden uitgevoerd)
+        # For commodities - using correct futures contract symbols (most reliable symbols first)
         if instrument == "XAUUSD":
             return "GC=F"  # Gold futures
         elif instrument == "XAGUSD":
             return "SI=F"  # Silver futures (not SL=F)
         elif instrument in ["XTIUSD", "WTIUSD", "USOIL"]:
-            # Try multiple alternative oil symbols - much more reliable approach
-            # We'll try these symbols in sequence in the get_market_data method
-            return "CL=F,BNO,UCO,OIL,XLE"  # Primary symbol is CL=F (WTI Crude Futures)
+            # Don't return multiple options here - we'll handle alternatives in get_market_data
+            return "CL=F"  # Primary symbol is CL=F (WTI Crude Futures)
         elif instrument == "XBRUSD":
-            return "BZ=F,BNO,OIL"  # Brent Crude Oil futures and alternatives
+            return "BZ=F"  # Brent Crude Oil futures
         elif instrument == "XPDUSD":
             return "PA=F"  # Palladium futures
         elif instrument == "XPTUSD":
@@ -871,19 +928,28 @@ class YahooFinanceProvider:
             # Is this a commodity?
             is_commodity = any(commodity in symbol.upper() for commodity in ["XAUUSD", "XAGUSD", "XTIUSD", "WTIUSD", "USOIL", "XBRUSD"])
             
-            # For oil commodities that return multiple tickers, try each one sequentially
-            if is_commodity and "," in formatted_symbol:
-                logger.info(f"[Yahoo] Multiple tickers configured for {symbol}: {formatted_symbol}")
+            # Define better alternative symbols for problematic tickers
+            oil_alternatives = {
+                "USOIL": ["CL=F", "USO", "UCO", "BNO", "OIL", "XLE"],
+                "XTIUSD": ["CL=F", "USO", "UCO", "BNO", "OIL", "XLE"],
+                "WTIUSD": ["CL=F", "USO", "UCO", "BNO", "OIL", "XLE"],
+                "XBRUSD": ["BZ=F", "BNO", "OIL"],
+                "XAUUSD": ["GC=F", "GLD", "IAU"],
+                "XAGUSD": ["SI=F", "SLV"]
+            }
+            
+            # For commodities that need multiple tickers, try each one sequentially
+            if is_commodity and symbol.upper() in oil_alternatives:
+                alternative_tickers = oil_alternatives[symbol.upper()]
+                logger.info(f"[Yahoo] Using alternative tickers for {symbol}: {alternative_tickers}")
                 
-                # Split the configured tickers and try each one
-                ticker_options = formatted_symbol.split(",")
-                
-                for ticker_option in ticker_options:
+                for ticker_option in alternative_tickers:
                     ticker_option = ticker_option.strip()
                     logger.info(f"[Yahoo] Trying alternative ticker for {symbol}: {ticker_option}")
                     
                     try:
                         # Try to get data with this ticker
+                        # Adjust the timeout for each attempt - first ones get longer timeout
                         df = await YahooFinanceProvider._try_get_market_data(
                             ticker_option, 
                             symbol, 
@@ -901,7 +967,7 @@ class YahooFinanceProvider:
                         logger.warning(f"[Yahoo] Error with ticker {ticker_option} for {symbol}: {str(e)}, trying next option")
                 
                 # If we get here, all tickers failed
-                logger.error(f"[Yahoo] All ticker options failed for {symbol}")
+                logger.error(f"[Yahoo] All alternative tickers failed for {symbol}")
                 
                 # IMPORTANT: Return None instead of fallback data - we want real data or nothing
                 logger.info(f"[Yahoo] No fallback data used for {symbol} - we require real data")
@@ -916,7 +982,7 @@ class YahooFinanceProvider:
                     "consecutive_failures": 0
                 }
             
-            # For non-oil or single ticker, use the normal approach
+            # For non-commodity or single ticker, use the normal approach with the formatted symbol
             return await YahooFinanceProvider._try_get_market_data(
                 formatted_symbol, 
                 symbol, 
@@ -951,9 +1017,12 @@ class YahooFinanceProvider:
             else:
                 interval = "1d"  # Default to daily
             
-            # CRITICAL FIX: Always use today and past dates, never future dates
-            # Use current date (now) as reference, not a static date
-            end_date = datetime.now() - timedelta(days=1)  # Yesterday
+            # CRITICAL FIX: ALWAYS use current time for date calculations
+            # Current time with time zone info stripped
+            current_time = datetime.now().replace(tzinfo=None)
+            
+            # Ensure end_date is always yesterday (avoid any possible future dates)
+            end_date = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
             
             # For 4h timeframe, we need to fetch more 1h candles
             multiplier = 4 if timeframe == "4h" else 1
@@ -990,9 +1059,24 @@ class YahooFinanceProvider:
                 # Default fallback
                 start_date = end_date - timedelta(days=365)
             
+            # Double check dates are in the past
+            # This is belt and suspenders to ensure we never request future dates
+            if start_date >= current_time:
+                logger.warning(f"[Yahoo] Calculated start_date {start_date} is in the future! Setting to 30 days before end_date.")
+                start_date = end_date - timedelta(days=30)
+                
+            if end_date >= current_time:
+                logger.warning(f"[Yahoo] Calculated end_date {end_date} is in the future! Setting to yesterday.")
+                end_date = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            
             # Make sure we're using correct timezone-aware objects and dates in the past
             start_date = start_date.replace(tzinfo=None)
             end_date = end_date.replace(tzinfo=None)
+            
+            # Final sanity check on dates
+            # Logger actual date objects for debugging
+            logger.info(f"[Yahoo] Current time: {current_time}")
+            logger.info(f"[Yahoo] Final calculation - start date: {start_date}, end date: {end_date}")
             
             # Force correct formatting of dates for API calls
             start_date_str = start_date.strftime('%Y-%m-%d')
@@ -1000,23 +1084,32 @@ class YahooFinanceProvider:
             
             logger.info(f"[Yahoo] Requesting data for {formatted_symbol} from {start_date_str} to {end_date_str} with interval {interval}")
             
-            # INCREASED MAX RETRIES FOR DOWNLOAD: Never give up, keep trying to get real data
+            # IMPROVED RATE LIMIT HANDLING
+            # Start with fewer attempts but longer backoff times
             success = False
-            max_attempts = 3  # Reduced to prevent rate limiting
+            max_attempts = 2  # Reduced attempts to avoid excessive 429 errors
             attempt = 0
             df = None
+            
+            # Minimum wait time between attempts (seconds)
+            min_wait_time = 15  # Start with a high value
             
             while not success and attempt < max_attempts:
                 attempt += 1
                 try:
-                    # Double the wait time between attempts
+                    # Exponential backoff between attempts
                     if attempt > 1:
-                        backoff_seconds = (attempt - 1) * 10  # 10, 20 seconds
+                        backoff_seconds = min_wait_time * (2 ** (attempt - 1))  # Exponential backoff
                         logger.info(f"[Yahoo] Backing off for {backoff_seconds} seconds before retry...")
                         await asyncio.sleep(backoff_seconds)
                     
                     # Wait for rate limit - increased wait time
                     await YahooFinanceProvider._wait_for_rate_limit()
+                    
+                    # Add more randomization to avoid synchronized requests
+                    jitter = random.uniform(3.0, 8.0)  # More jitter
+                    await asyncio.sleep(jitter)
+                    logger.info(f"[Yahoo] Added extra jitter delay of {jitter:.2f} seconds to avoid rate limits")
                     
                     # Download the data from Yahoo Finance
                     df = await YahooFinanceProvider._download_data(
@@ -1033,18 +1126,18 @@ class YahooFinanceProvider:
                         success = True
                         
                         # Reset the min delay on success to prevent continuous increasing
-                        YahooFinanceProvider._min_delay_between_calls = max(5, YahooFinanceProvider._min_delay_between_calls - 1)
+                        YahooFinanceProvider._min_delay_between_calls = max(10, YahooFinanceProvider._min_delay_between_calls - 1)
                     else:
                         logger.warning(f"[Yahoo] Attempt {attempt}/{max_attempts}: No data returned for {original_symbol} ({formatted_symbol})")
                         
                         # Increase minimum delay between calls to avoid rate limiting
-                        YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 2, 20)
+                        YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 5, 30)
                         
                 except Exception as e:
                     logger.error(f"[Yahoo] Attempt {attempt}/{max_attempts}: Error downloading data for {original_symbol}: {str(e)}")
                     
                     # Increase minimum delay even more on error
-                    YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 3, 30)
+                    YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 10, 60)
             
             # After all attempts, if we still don't have data, we have to return None
             if df is None or df.empty:
