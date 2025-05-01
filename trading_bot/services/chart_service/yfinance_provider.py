@@ -232,7 +232,7 @@ class YahooFinanceProvider:
         except Exception as e:
             logger.error(f"[Yahoo] Onverwachte fout: {str(e)}")
             logger.error(traceback.format_exc())
-                return pd.DataFrame(), {"error": "unknown", "message": str(e)}
+        return pd.DataFrame(), {"error": "unknown", "message": str(e)}
     
     @staticmethod
     def _map_timeframe_to_interval(timeframe: str) -> str:
@@ -351,7 +351,7 @@ class YahooFinanceProvider:
             months = limit
             if months <= 12:
                 return f"{months + 1}mo"
-        else:
+            else:
                 years = months / 12
                 return f"{int(years) + 1}y"
         
@@ -365,7 +365,7 @@ class YahooFinanceProvider:
             return df
         
         # Zorg dat de kolommen de juiste namen hebben
-            if isinstance(df.columns, pd.MultiIndex):
+        if isinstance(df.columns, pd.MultiIndex):
             # yfinance geeft soms een MultiIndex terug
             df = df.droplevel(level=0, axis=1)
         
@@ -380,8 +380,8 @@ class YahooFinanceProvider:
                 columns.append(lower_col.capitalize())
         
         # Hernoem kolommen indien nodig
-            if rename_map:
-                df = df.rename(columns=rename_map)
+        if rename_map:
+            df = df.rename(columns=rename_map)
         
         # Voeg missende kolommen toe met NaN waarden
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -392,17 +392,17 @@ class YahooFinanceProvider:
         if getattr(df, '_timeframe', None) == '4h':
             try:
                 # Aggregatie regels
-                    agg_dict = {
-                        'Open': 'first',
-                        'High': 'max',
-                        'Low': 'min',
+                agg_dict = {
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
                     'Close': 'last',
                     'Volume': 'sum'
-                    }
-                        
+                }
+                
                 # Resample
-                    df = df.resample('4h').agg(agg_dict)
-                except Exception as e:
+                df = df.resample('4h').agg(agg_dict)
+            except Exception as e:
                 logger.error(f"[Yahoo] Fout bij resampling naar 4h: {str(e)}")
         
         # Verwerk missende waarden
@@ -410,9 +410,9 @@ class YahooFinanceProvider:
         df = df.dropna()  # Verwijder resterende NaN waarden
         
         # Sorteer op index
-            df = df.sort_index()
-            
-            return df
+        df = df.sort_index()
+        
+        return df
 
     @staticmethod
     def _calculate_indicators(df: pd.DataFrame) -> Dict[str, Any]:
