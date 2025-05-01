@@ -1515,8 +1515,8 @@ class ChartService:
             # Add realistic defaults for commodities
             elif instrument == "XAGUSD":  # Silver
                 current_price = 27.5 + random.uniform(-1, 1)
-            elif instrument in ["WTIUSD", "XTIUSD"]:  # Crude oil
-                current_price = 78 + random.uniform(-2, 2)
+            elif instrument in ["WTIUSD", "XTIUSD", "USOIL"]:  # Crude oil
+                current_price = 100.5 + random.uniform(-2, 2)
             else:
                 current_price = 100 + random.uniform(-5, 5)
             
@@ -2120,7 +2120,7 @@ class ChartService:
                 
             # Only if Yahoo Finance completely fails, use estimate
             logger.warning(f"Yahoo Finance failed for {symbol}, using estimated price")
-            default_oil_price = 81.80  # Updated to recent WTI Crude Oil price ~$81-82 range
+            default_oil_price = 100.50  # Updated to more accurate WTI Crude Oil price
             
             # Add realistic variation
             import random
@@ -2132,7 +2132,7 @@ class ChartService:
             
         except Exception as e:
             logger.error(f"Error getting oil price from Yahoo Finance: {str(e)}")
-            return 81.50  # Return updated base price if even the fallback fails
+            return 100.50  # Return updated base price if even the fallback fails
             
     async def _fetch_oil_price_fallback(self, symbol: str) -> Optional[float]:
         """
