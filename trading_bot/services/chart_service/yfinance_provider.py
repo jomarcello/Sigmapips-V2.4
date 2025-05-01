@@ -45,10 +45,13 @@ def is_rate_limit_error(exception):
 
 # List of user agents to rotate
 user_agents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0'
 ]
 
 class YahooFinanceProvider:
@@ -58,8 +61,40 @@ class YahooFinanceProvider:
     _cache = {}
     _cache_timeout = 3600  # Cache timeout in seconds (1 hour)
     _last_api_call = 0
-    _min_delay_between_calls = 2  # Minimum delay between calls in seconds (increased slightly)
+    _min_delay_between_calls = 5  # Increased minimum delay between calls to 5 seconds
     _session = None
+    
+    # Circuit breaker to prevent repeated requests to rate-limited symbols
+    _circuit_breaker = {}  # Format: {"symbol": {"last_failure": timestamp, "consecutive_failures": count}}
+    _circuit_breaker_timeout = 1800  # 30 minutes timeout for circuit breaker
+    _max_consecutive_failures = 3  # Number of consecutive failures before opening circuit
+
+    @staticmethod
+    def _fix_future_dates(start_date, end_date):
+        """
+        Fix dates to ensure they are not in the future
+        
+        Args:
+            start_date: The initial start date
+            end_date: The initial end date
+            
+        Returns:
+            tuple: Corrected (start_date, end_date)
+        """
+        current_date = datetime.now()
+        
+        # If end_date is in the future, set it to current date
+        if end_date > current_date:
+            logger.warning(f"[Yahoo] End date {end_date} is in the future. Setting to current date.")
+            end_date = current_date
+            
+        # If start_date is in the future or after end_date, fix it
+        if start_date > current_date or start_date > end_date:
+            # Set start_date to 30 days before end_date
+            logger.warning(f"[Yahoo] Start date {start_date} is invalid. Setting to 30 days before end date.")
+            start_date = end_date - timedelta(days=30)
+            
+        return start_date, end_date
 
     @staticmethod
     def _get_session():
@@ -78,11 +113,21 @@ class YahooFinanceProvider:
             session.mount("https://", adapter)
             
             # Use a random user agent
+            user_agent = random.choice(user_agents)
+            logger.info(f"[Yahoo] Using User-Agent: {user_agent}")
+            
             session.headers.update({
-                'User-Agent': random.choice(user_agents),
+                'User-Agent': user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Connection': 'keep-alive'
+                'Connection': 'keep-alive',
+                # Add additional headers that might help avoid anti-scraping
+                'Cache-Control': 'max-age=0',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-User': '?1'
             })
 
             # Optional: Add proxy support if needed via environment variables
@@ -101,9 +146,80 @@ class YahooFinanceProvider:
                 except Exception as e:
                     logger.error(f"Error setting up proxies: {str(e)}")
             
+            # Try to get an initial cookie by visiting the main page
+            try:
+                session.get('https://finance.yahoo.com/', timeout=10)
+                logger.info("[Yahoo] Initialized session with cookies from finance.yahoo.com")
+            except Exception as e:
+                logger.warning(f"[Yahoo] Failed to get initial cookies: {str(e)}")
+            
             YahooFinanceProvider._session = session
             logger.info("[Yahoo] Initialized shared Requests Session with retries and rotating User-Agent")
+        
+        # Always rotate the User-Agent on existing session to avoid detection
+        YahooFinanceProvider._session.headers.update({
+            'User-Agent': random.choice(user_agents)
+        })
+        
         return YahooFinanceProvider._session
+
+    @staticmethod
+    async def _check_circuit_breaker(symbol: str) -> bool:
+        """
+        Check if a symbol is currently blocked by the circuit breaker.
+        
+        Args:
+            symbol: The symbol to check
+            
+        Returns:
+            bool: True if circuit is open (should not make request), False if circuit is closed
+        """
+        current_time = time.time()
+        
+        if symbol in YahooFinanceProvider._circuit_breaker:
+            circuit_info = YahooFinanceProvider._circuit_breaker[symbol]
+            last_failure = circuit_info.get("last_failure", 0)
+            consecutive_failures = circuit_info.get("consecutive_failures", 0)
+            
+            # If we've had too many consecutive failures and we're within the timeout window
+            if (consecutive_failures >= YahooFinanceProvider._max_consecutive_failures and
+                current_time - last_failure < YahooFinanceProvider._circuit_breaker_timeout):
+                
+                # Calculate remaining time until circuit resets
+                remaining_time = YahooFinanceProvider._circuit_breaker_timeout - (current_time - last_failure)
+                logger.warning(f"[Yahoo] Circuit breaker is open for {symbol}. Too many consecutive failures. "
+                            f"Will retry after {remaining_time/60:.1f} minutes.")
+                return True  # Circuit is open, don't make the request
+        
+        return False  # Circuit is closed, proceed with request
+    
+    @staticmethod
+    def _update_circuit_breaker(symbol: str, success: bool):
+        """
+        Update the circuit breaker status for a symbol based on request success/failure.
+        
+        Args:
+            symbol: The symbol that was requested
+            success: Whether the request was successful
+        """
+        current_time = time.time()
+        
+        if symbol not in YahooFinanceProvider._circuit_breaker:
+            YahooFinanceProvider._circuit_breaker[symbol] = {
+                "last_failure": 0,
+                "consecutive_failures": 0
+            }
+        
+        if success:
+            # Reset on success
+            YahooFinanceProvider._circuit_breaker[symbol]["consecutive_failures"] = 0
+        else:
+            # Update on failure
+            YahooFinanceProvider._circuit_breaker[symbol]["last_failure"] = current_time
+            YahooFinanceProvider._circuit_breaker[symbol]["consecutive_failures"] += 1
+            
+            count = YahooFinanceProvider._circuit_breaker[symbol]["consecutive_failures"]
+            logger.warning(f"[Yahoo] Updated circuit breaker for {symbol}: consecutive failures = {count}")
 
     @staticmethod
     async def _wait_for_rate_limit():
@@ -115,12 +231,17 @@ class YahooFinanceProvider:
             logger.info(f"[Yahoo] Rate limit: waiting for {wait_time:.2f} seconds before next call.")
             await asyncio.sleep(wait_time)
         # Update last call time *after* waiting/checking
-        YahooFinanceProvider._last_api_call = time.time() 
+        YahooFinanceProvider._last_api_call = time.time()
+        
+        # Add a small random delay to avoid synchronized requests
+        jitter = random.uniform(0.5, 2.0)
+        await asyncio.sleep(jitter)
+        logger.info(f"[Yahoo] Added jitter delay of {jitter:.2f} seconds.")
 
     @staticmethod
     @retry(
-        stop=stop_after_attempt(4), # Max 4 attempts total
-        wait=wait_exponential(multiplier=2, min=5, max=60), # Exponential backoff: 5s, 10s, 20s
+        stop=stop_after_attempt(3),  # Reduced max attempts
+        wait=wait_exponential(multiplier=2, min=10, max=60),  # Increased wait times
         retry_error_callback=lambda retry_state: logger.warning(f"[Yahoo] Retrying download for {retry_state.args[0]} (attempt {retry_state.attempt_number}), waiting {retry_state.idle_for:.2f}s. Reason: {retry_state.outcome.exception()}"),
         reraise=True
     )
@@ -132,9 +253,19 @@ class YahooFinanceProvider:
         """
         loop = asyncio.get_event_loop()
         yf_symbol = YahooFinanceProvider._format_symbol(symbol)
+        
+        # Fix dates to ensure they're not in the future
+        start_date, end_date = YahooFinanceProvider._fix_future_dates(start_date, end_date)
+        
+        # Check circuit breaker before making request
+        if await YahooFinanceProvider._check_circuit_breaker(yf_symbol):
+            logger.warning(f"[Yahoo] Circuit breaker preventing request for {yf_symbol}")
+            raise Exception(f"Circuit breaker is open for {yf_symbol} due to repeated rate limit errors")
+            
         session = YahooFinanceProvider._get_session() # Get session once
         
         logger.info(f"[Yahoo] Preparing download for {symbol} ({yf_symbol}) on {interval} timeframe")
+        logger.info(f"[Yahoo] Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
         # Inner synchronous function to run in executor
         # It includes the logic for both download and ticker.history
@@ -153,13 +284,20 @@ class YahooFinanceProvider:
                     progress=False,
                     session=session, # Use shared session
                     timeout=timeout,
-                    ignore_tz=True
+                    ignore_tz=True,
+                    repair=True,  # Try to repair data gaps
+                    prepost=False, # Exclude pre/post market data
+                    threads=False, # Disable threading to avoid potential issues
+                    rounding=True  # Round values to reduce floating point issues
                 )
+                
                 if df is None or df.empty:
                     logger.warning(f"[Yahoo] yf.download returned empty DataFrame for {yf_symbol}")
                     df = None
                 else:
                     logger.info(f"[Yahoo] yf.download successful for {yf_symbol}, got {len(df)} rows")
+                    # Update circuit breaker on success
+                    YahooFinanceProvider._update_circuit_breaker(yf_symbol, True)
                     return df # Success, return early
 
             except Exception as download_e:
@@ -176,18 +314,26 @@ class YahooFinanceProvider:
                 logger.info(f"[Yahoo] yf.download failed or empty. Trying ticker.history for {yf_symbol}")
                 try:
                     ticker = yf.Ticker(yf_symbol, session=session)
+                    
+                    # Add a short sleep to avoid hitting rate limits
+                    time.sleep(1.5)
+                    
                     df = ticker.history(
                         start=start_date,
                         end=end_date,
                         interval=interval,
                         prepost=False,
                         auto_adjust=False,
+                        back_adjust=False,
+                        rounding=True
                     )
                     if df is None or df.empty:
                         logger.warning(f"[Yahoo] Ticker.history returned empty DataFrame for {yf_symbol}")
                         df = None
                     else:
                         logger.info(f"[Yahoo] Ticker.history successful for {yf_symbol}, got {len(df)} rows")
+                        # Update circuit breaker on success
+                        YahooFinanceProvider._update_circuit_breaker(yf_symbol, True)
                         return df # Success
 
                 except Exception as ticker_e:
@@ -199,9 +345,44 @@ class YahooFinanceProvider:
                     last_exception = ticker_e
                     df = None
             
-            # If both methods failed within this attempt, raise the last known exception
+            # --- Third attempt: Try different date ranges if both methods failed ---
+            if df is None:
+                try:
+                    logger.info(f"[Yahoo] Both methods failed. Trying with a shorter date range.")
+                    
+                    # Try a shorter date range (last 7 days)
+                    shorter_start = end_date - timedelta(days=7)
+                    
+                    # Add a short sleep to avoid hitting rate limits
+                    time.sleep(1.5)
+                    
+                    df = yf.download(
+                        tickers=yf_symbol,
+                        start=shorter_start.date(),
+                        end=end_date.date(),
+                        interval=interval,
+                        progress=False,
+                        session=session,
+                        timeout=timeout,
+                        ignore_tz=True
+                    )
+                    
+                    if df is not None and not df.empty:
+                        logger.info(f"[Yahoo] Shorter date range download successful for {yf_symbol}, got {len(df)} rows")
+                        # Update circuit breaker on success
+                        YahooFinanceProvider._update_circuit_breaker(yf_symbol, True)
+                        return df
+                        
+                except Exception as short_e:
+                    logger.error(f"[Yahoo] Shorter date range attempt failed: {str(short_e)}")
+                    # Continue with the last exception from previous attempts
+            
+            # If all methods failed, raise the last known exception
             if df is None or df.empty:
-                logger.warning(f"[Yahoo] Both yf.download and ticker.history failed for {yf_symbol} in this attempt.")
+                logger.warning(f"[Yahoo] All Yahoo Finance methods failed for {yf_symbol} in this attempt.")
+                # Update circuit breaker on failure
+                YahooFinanceProvider._update_circuit_breaker(yf_symbol, False)
+                
                 if last_exception:
                     # If it's a rate limit error, handle it specially to trigger right retry behavior
                     if is_rate_limit_error(last_exception):
@@ -218,7 +399,7 @@ class YahooFinanceProvider:
                     error_symbol = original_symbol if original_symbol else symbol
                     raise Exception(f"No data available for {error_symbol} ({yf_symbol}) from Yahoo Finance API after trying multiple methods")
             
-            return df # Should be unreachable if both failed and raised
+            return df # Should be unreachable if all methods failed and raised
 
         # ---> Wait before executing the synchronous download function <--- 
         await YahooFinanceProvider._wait_for_rate_limit()
@@ -231,12 +412,16 @@ class YahooFinanceProvider:
             # Log that retries failed and re-raise the last exception caught by tenacity
             final_exception = retry_err.last_attempt.exception()
             logger.error(f"[Yahoo] Download failed for {symbol} ({yf_symbol}) after multiple retries. Last error: {final_exception}")
+            # Update circuit breaker on final failure
+            YahooFinanceProvider._update_circuit_breaker(yf_symbol, False)
             # Raise the specific exception captured by the retry mechanism
             raise final_exception from retry_err
 
         except Exception as final_e:
             # Catch any other unexpected exception that might occur outside the download_sync or retry logic
             logger.error(f"[Yahoo] Final unexpected error fetching data for {symbol} ({yf_symbol}): {str(final_e)} type: {type(final_e).__name__}")
+            # Update circuit breaker on failure
+            YahooFinanceProvider._update_circuit_breaker(yf_symbol, False)
             raise final_e # Reraise the exception
 
     @staticmethod
