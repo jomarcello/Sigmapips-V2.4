@@ -2,534 +2,1041 @@ import logging
 import traceback
 import asyncio
 import os
-import aiohttp
-import hmac
-import hashlib
+from typing import Optional, Dict, Any
 import time
-import random
-from typing import Optional, Dict, Any, List
-from collections import namedtuple
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
+import random
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wait_fixed
+import yfinance as yf
+import functools
+import numpy as np
+import pytz
+import re
 
 logger = logging.getLogger(__name__)
 
-class BinanceProvider:
-    """Provider class for Binance API integration for cryptocurrency data"""
+# Retry strategy for general errors
+retry_general = dict(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
+
+# Specific retry strategy for rate limit errors
+retry_rate_limit = dict(
+    stop=stop_after_attempt(4),  # Allow more attempts for rate limits
+    wait=wait_fixed(30),  # Use wait_fixed instead of wait_base
+    reraise=True
+)
+
+# Function to check if an exception is a rate limit error
+def is_rate_limit_error(exception):
+    """Check if an exception is a rate limit error based on its message"""
+    error_msg = str(exception).lower()
+    rate_limit_phrases = [
+        "rate limit", 
+        "too many requests", 
+        "429", 
+        "rate limited", 
+        "try after a while"
+    ]
+    return any(phrase in error_msg for phrase in rate_limit_phrases)
+
+# List of user agents to rotate
+user_agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0'
+]
+
+class YahooFinanceProvider:
+    """Provider class for Yahoo Finance API integration with simplified error handling"""
     
-    # Base URLs for Binance API with failover options
-    BASE_ENDPOINTS = [
-        "https://api.binance.com",
-        "https://api-gcp.binance.com", 
-        "https://api1.binance.com",
-        "https://api2.binance.com",
-        "https://api3.binance.com",
-        "https://api4.binance.com"
+    # Keep track of last API call time to manage rate limiting
+    _last_api_call = 0
+    _min_delay_between_calls = 2  # Start with 2 seconds minimum delay
+    _session = None
+    
+    # Add rate limit tracking
+    _rate_limit_hits = 0
+    _rate_limit_last_hit = 0
+    _rate_limit_backoff = 5  # Start with 5 seconds, will increase on consecutive hits
+    
+    # Add more diverse and modern user agents to rotate through
+    _user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 OPR/110.0.0.0',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
     ]
     
-    # Officially documented endpoint for public market data (less restricted)
-    SPOT_DATA_API_URL = "https://data-api.binance.vision"
-    
-    # Current active endpoint (start with the primary one)
-    _active_endpoint_index = 0
-    
-    # Track API usage
-    _last_api_call = 0
-    _api_call_count = 0
-    _max_calls_per_minute = 20  # Binance rate limits
-    
-    # API credentials (loaded from environment variables)
-    API_KEY = os.environ.get("BINANCE_API_KEY", "")
-    API_SECRET = os.environ.get("BINANCE_API_SECRET", "")
-    
-    @classmethod
-    def get_base_url(cls):
-        """Get current active base URL with optional failover"""
-        return cls.BASE_ENDPOINTS[cls._active_endpoint_index]
-    
-    @classmethod
-    def switch_endpoint(cls):
-        """Switch to next endpoint for failover"""
-        cls._active_endpoint_index = (cls._active_endpoint_index + 1) % len(cls.BASE_ENDPOINTS)
-        new_endpoint = cls.get_base_url()
-        logger.info(f"Switching to Binance endpoint: {new_endpoint}")
-        return new_endpoint
+    # Add domains that may need to be whitelisted
+    _yahoo_domains = [
+        "fc.yahoo.com",
+        "query2.finance.yahoo.com", 
+        "query1.finance.yahoo.com"
+    ]
+
+    @staticmethod
+    def _get_session():
+        """Get or create a requests session with retry logic"""
+        if YahooFinanceProvider._session is None:
+            session = requests.Session()
+            
+            # Configure retry strategy
+            retries = Retry(
+                total=3, 
+                backoff_factor=1.0,
+                status_forcelist=[429, 500, 502, 503, 504]
+            )
+            adapter = HTTPAdapter(max_retries=retries)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            # Use a random user agent for the session
+            user_agent = random.choice(YahooFinanceProvider._user_agents)
+            
+            session.headers.update({
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Cache-Control': 'max-age=0',
+                'Connection': 'keep-alive'
+            })
+            
+            # Try to get initial cookies
+            try:
+                session.get('https://finance.yahoo.com/', timeout=10)
+            except Exception as e:
+                logger.warning(f"[Yahoo] Failed to get initial cookies: {str(e)}")
+            
+            YahooFinanceProvider._session = session
+        else:
+            # Always rotate user agents on each API call
+            YahooFinanceProvider._session.headers.update({
+                'User-Agent': random.choice(YahooFinanceProvider._user_agents)
+            })
+        
+        return YahooFinanceProvider._session
+
+    @staticmethod
+    def _wait_for_rate_limit():
+        """Ensures a minimum delay between consecutive API calls."""
+        now = time.time()
+        time_since_last_call = now - YahooFinanceProvider._last_api_call
+        
+        # Check if we've had recent rate limit hits
+        time_since_rate_limit = now - YahooFinanceProvider._rate_limit_last_hit
+        
+        # Determine the wait time based on rate limit history
+        wait_time = YahooFinanceProvider._min_delay_between_calls
+        
+        # If we've had rate limit hits recently, use the more aggressive backoff
+        if YahooFinanceProvider._rate_limit_hits > 0 and time_since_rate_limit < 300:  # Within last 5 minutes
+            wait_time = max(wait_time, YahooFinanceProvider._rate_limit_backoff)
+            logger.info(f"[Yahoo] Using rate limit backoff: {wait_time:.2f} seconds (hits: {YahooFinanceProvider._rate_limit_hits})")
+            
+            # Consider resetting the session if we're using aggressive backoff
+            YahooFinanceProvider._reset_session_if_needed()
+        
+        # If we need to wait, do so
+        if time_since_last_call < wait_time:
+            actual_wait = wait_time - time_since_last_call
+            logger.info(f"[Yahoo] Rate limit: waiting for {actual_wait:.2f} seconds before next call.")
+            time.sleep(actual_wait)
+        
+        # Add some random jitter to avoid synchronized requests
+        jitter = random.uniform(0.5, 2.0)
+        time.sleep(jitter)
+        
+        # Update last call time
+        YahooFinanceProvider._last_api_call = time.time()
     
     @staticmethod
-    async def get_market_data(instrument: str, timeframe: str = "1h") -> Optional[Dict[str, Any]]:
-        """
-        Get market data from Binance Data API (data.binance.com) for technical analysis.
-        This endpoint is less likely to be geo-restricted for market data.
+    def _ensure_valid_dates(start_date, end_date):
+        """Ensure dates are valid (in the past) and properly formatted"""
+        # Get current date
+        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
         
-        Args:
-            instrument: Trading instrument (e.g., BTCUSD, ETHUSDT)
-            timeframe: Timeframe for analysis (1h, 4h, 1d)
-            
-        Returns:
-            Optional[Dict]: Technical analysis data or None if failed
-        """
-        # Use the dedicated SPOT data endpoint URL defined at class level
-        data_endpoint_url = BinanceProvider.SPOT_DATA_API_URL 
+        # Ensure end_date is not in the future
+        if end_date >= current_date:
+            end_date = current_date - timedelta(days=1)  # Yesterday
         
-        # Log original instrument before formatting
-        logger.info(f"[Binance Data API] Getting market data for instrument: {instrument}")
+        # Ensure start_date is not in the future and before end_date
+        if start_date >= current_date or start_date >= end_date:
+            start_date = end_date - timedelta(days=30)  # 30 days before end_date
+        
+        return start_date, end_date
+
+    @staticmethod
+    def _format_symbol(symbol: str) -> str:
+        """Format symbol for Yahoo Finance API"""
+        symbol = symbol.upper()
+        
+        # Handle commodities
+        commodities_map = {
+            "XAUUSD": "GC=F",   # Gold futures
+            "XAGUSD": "SI=F",   # Silver futures
+            "XTIUSD": "CL=F",   # WTI Crude futures (primary)
+            "WTIUSD": "CL=F",   # WTI Crude futures (alias)
+            "USOIL": "CL=F",    # WTI Crude futures (alias)
+            "XBRUSD": "BZ=F",   # Brent Crude oil futures
+            "XPDUSD": "PA=F",   # Palladium futures
+            "XPTUSD": "PL=F",   # Platinum futures
+            "NATGAS": "NG=F",   # Natural Gas futures
+            "COPPER": "HG=F"    # Copper futures
+        }
+        
+        if symbol in commodities_map:
+            return commodities_map[symbol]
+        
+        # Handle indices
+        indices_map = {
+            "US30": "^DJI",      # Dow Jones
+            "US500": "^GSPC",    # S&P 500
+            "US100": "^NDX",     # Nasdaq 100
+            "UK100": "^FTSE",    # FTSE 100
+            "DE40": "^GDAXI",    # DAX
+            "JP225": "^N225",    # Nikkei 225
+            "AU200": "^AXJO",    # ASX 200
+            "EU50": "^STOXX50E", # Euro Stoxx 50
+            "FR40": "^FCHI",     # CAC 40
+            "HK50": "^HSI"       # Hang Seng
+        }
+        
+        if symbol in indices_map:
+            return indices_map[symbol]
+        
+        # Handle forex pairs (e.g., EURUSD -> EUR=X)
+        if len(symbol) == 6 and all(c.isalpha() for c in symbol):
+            base = symbol[:3]
+            quote = symbol[3:]
+            return f"{base}{quote}=X"
+        
+        return symbol
+
+    @staticmethod
+    def _validate_and_clean_data(df: pd.DataFrame) -> pd.DataFrame:
+        """Perform basic validation and cleaning of market data"""
+        if df is None or df.empty:
+            return df
         
         try:
-            # Implement basic rate limiting (still useful)
-            current_time = time.time()
-            minute_passed = current_time - BinanceProvider._last_api_call >= 60
+            # Remove any duplicate indices
+            if df.index.duplicated().sum() > 0:
+                df = df[~df.index.duplicated(keep='last')]
             
-            if minute_passed:
-                BinanceProvider._api_call_count = 0
-                BinanceProvider._last_api_call = current_time
-            elif BinanceProvider._api_call_count >= BinanceProvider._max_calls_per_minute:
-                logger.warning(f"Binance API rate limit reached ({BinanceProvider._api_call_count} calls). Waiting...")
-                await asyncio.sleep(5 + random.random() * 2)
+            # Forward fill a small number of missing values
+            df = df.ffill(limit=2)
             
-            BinanceProvider._api_call_count += 1
+            # Remove rows with remaining NaN values
+            df = df.dropna()
             
-            # Format symbol for Binance API
-            formatted_symbol = BinanceProvider._format_symbol(instrument)
-            logger.info(f"[Binance Data API] Formatted symbol: {instrument} -> {formatted_symbol}")
+            # Validate price relationships
+            valid_rows = (
+                (df['High'] >= df['Low']) & 
+                (df['High'] >= df['Open']) & 
+                (df['High'] >= df['Close']) &
+                (df['Low'] <= df['Open']) & 
+                (df['Low'] <= df['Close'])
+            )
             
-            logger.info(f"Fetching {formatted_symbol} data from Binance Vision Data API: {data_endpoint_url}. API call #{BinanceProvider._api_call_count} this minute.")
+            df = df[valid_rows]
             
-            # Map timeframe to Binance interval
-            binance_interval = {
-                "1m": "1m", 
-                "5m": "5m", 
-                "15m": "15m", 
-                "30m": "30m",
-                "1h": "1h", 
-                "2h": "2h", 
-                "4h": "4h", 
-                "1d": "1d",
-                "1w": "1w",
-                "1M": "1M"
-            }.get(timeframe, "1h")
+            # Validate Volume if it exists
+            if 'Volume' in df.columns:
+                df = df[df['Volume'] >= 0]
             
-            limit = 120 # Always get enough data for indicators
+            return df
+        
+        except Exception as e:
+            logger.error(f"[Yahoo] Error in data validation: {str(e)}")
+            return df
+    
+    @staticmethod
+    def _try_download_with_ticker(ticker_symbol, start_date, end_date, interval, timeout=30):
+        """Try to download data using the Ticker approach"""
+        logger.info(f"[Yahoo] Trying ticker.history for {ticker_symbol}")
+        
+        try:
+            # Get a session with a fresh user agent
+            session = YahooFinanceProvider._get_session()
+            # Log the user agent we're using for debugging
+            logger.info(f"[Yahoo] Using User-Agent: {session.headers.get('User-Agent', 'Unknown')[:30]}...")
+            
+            ticker = yf.Ticker(ticker_symbol, session=session)
+            
+            df = ticker.history(
+                start=start_date.date(),
+                end=end_date.date(),
+                interval=interval,
+                prepost=False,
+                auto_adjust=True,
+                rounding=True
+            )
+            
+            if df is not None and not df.empty:
+                logger.info(f"[Yahoo] Ticker.history successful for {ticker_symbol}, got {len(df)} rows")
+                # Reset consecutive rate limit count on success
+                if YahooFinanceProvider._rate_limit_hits > 0:
+                    YahooFinanceProvider._rate_limit_hits = max(0, YahooFinanceProvider._rate_limit_hits - 1)
+                return df
+            else:
+                logger.warning(f"[Yahoo] Ticker.history returned empty DataFrame for {ticker_symbol}")
+                return None
                 
-            endpoint = "/api/v3/klines"
-            params = {
-                "symbol": formatted_symbol,
-                "interval": binance_interval,
-                "limit": limit
-            }
+        except Exception as e:
+            error_msg = str(e).lower()
+            logger.error(f"[Yahoo] Ticker.history exception for {ticker_symbol}: {str(e)}")
             
-            # Get candlestick data using the specific data endpoint
-            async with aiohttp.ClientSession() as session:
-                headers = {} # Data endpoint typically doesn't need API key for public klines
+            # Check for connectivity issues due to ad blockers or firewalls
+            if YahooFinanceProvider._is_connectivity_error(e):
+                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
+                logger.error(f"[Yahoo] Connection error detected! This may be due to ad-blocking software or firewall. "
+                             f"Try whitelisting these domains: {domains_list}")
+                time.sleep(2)  # Brief pause
+            # Check for rate limit errors
+            elif YahooFinanceProvider._is_rate_limit_error(e):
+                YahooFinanceProvider._handle_rate_limit_error()
+                logger.error(f"[Yahoo] Rate limit detected during ticker.history for {ticker_symbol}")
                 
-                request_url = f"{data_endpoint_url}{endpoint}"
-                logger.info(f"[Binance Data API Request] URL: {request_url}")
-                logger.info(f"[Binance Data API Request] PARAMS: {params}")
-                logger.info(f"[Binance Data API Request] HEADERS: {headers}")
+                # Add an additional sleep on rate limit error
+                time.sleep(5)
+            
+            return None
+    
+    @staticmethod
+    def _try_download_with_download(ticker_symbol, start_date, end_date, interval, timeout=30):
+        """Try to download data using the yf.download approach"""
+        logger.info(f"[Yahoo] Trying yf.download for {ticker_symbol}")
+        
+        try:
+            # Get a session with a fresh user agent
+            session = YahooFinanceProvider._get_session()
+            # Log the user agent we're using for debugging
+            logger.info(f"[Yahoo] Using User-Agent: {session.headers.get('User-Agent', 'Unknown')[:30]}...")
+            
+            df = yf.download(
+                tickers=ticker_symbol,
+                start=start_date.date(),
+                end=end_date.date(),
+                interval=interval,
+                progress=False,
+                session=session,
+                timeout=timeout,
+                ignore_tz=True,
+                prepost=False,
+                threads=False,
+                rounding=True
+            )
+            
+            if df is not None and not df.empty:
+                logger.info(f"[Yahoo] yf.download successful for {ticker_symbol}, got {len(df)} rows")
+                # Reset consecutive rate limit count on success
+                if YahooFinanceProvider._rate_limit_hits > 0:
+                    YahooFinanceProvider._rate_limit_hits = max(0, YahooFinanceProvider._rate_limit_hits - 1)
+                return df
+            else:
+                logger.warning(f"[Yahoo] yf.download returned empty DataFrame for {ticker_symbol}")
+                return None
                 
-                try:
-                    async with session.get(request_url, params=params, headers=headers, timeout=20) as response: # Increased timeout slightly
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(f"[Binance Data API Response Error] STATUS: {response.status}")
-                            logger.error(f"[Binance Data API Response Error] HEADERS: {response.headers}")
-                            logger.error(f"[Binance Data API Response Error] BODY: {error_text}")
-                            # If data endpoint fails, return None - no fallback needed for this specific strategy
-                            return None
+        except Exception as e:
+            error_msg = str(e).lower()
+            logger.error(f"[Yahoo] yf.download exception for {ticker_symbol}: {str(e)}")
+            
+            # Check for connectivity issues due to ad blockers or firewalls
+            if YahooFinanceProvider._is_connectivity_error(e):
+                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
+                logger.error(f"[Yahoo] Connection error detected! This may be due to ad-blocking software or firewall. "
+                             f"Try whitelisting these domains: {domains_list}")
+                time.sleep(2)  # Brief pause
+            # Check for rate limit errors
+            elif YahooFinanceProvider._is_rate_limit_error(e):
+                YahooFinanceProvider._handle_rate_limit_error()
+                logger.error(f"[Yahoo] Rate limit detected during yf.download for {ticker_symbol}")
+                
+                # Add an additional sleep on rate limit error
+                time.sleep(5)
+                
+            return None
+
+    @staticmethod
+    def _download_market_data(symbol, formatted_symbol, timeframe, start_date, end_date, interval):
+        """Download market data with multiple attempts and methods"""
+        # Wait for rate limits
+        YahooFinanceProvider._wait_for_rate_limit()
+        
+        # First attempt: try yf.download
+        df = YahooFinanceProvider._try_download_with_download(
+            formatted_symbol, start_date, end_date, interval, timeout=45
+        )
+        
+        # If download failed, wait and try Ticker approach
+        if df is None or df.empty:
+            # Add delay before second attempt
+            delay = 3
+            if YahooFinanceProvider._rate_limit_hits > 0:
+                # Use longer delay if we've had rate limit issues
+                delay = min(10 * YahooFinanceProvider._rate_limit_hits, 60)
+                logger.info(f"[Yahoo] Using longer delay ({delay}s) before retry due to rate limiting")
+                
+            time.sleep(delay)
+            YahooFinanceProvider._wait_for_rate_limit()
+            
+            df = YahooFinanceProvider._try_download_with_ticker(
+                formatted_symbol, start_date, end_date, interval
+            )
+        
+        # For commodities, we might need to try alternative symbols
+        if (df is None or df.empty) and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
+            # Try alternative symbols for oil
+            alternatives = ["CL=F", "USO", "BNO"]
+            
+            for alt in alternatives:
+                if alt == formatted_symbol:
+                    continue  # Skip if it's the same as what we already tried
+                
+                logger.info(f"[Yahoo] Trying alternative symbol {alt} for {symbol}")
+                
+                # Add delay before attempt with alternative
+                delay = 5
+                if YahooFinanceProvider._rate_limit_hits > 0:
+                    # Use longer delay if we've had rate limit issues
+                    delay = min(15 * YahooFinanceProvider._rate_limit_hits, 120)
+                    logger.info(f"[Yahoo] Using longer delay ({delay}s) before alternative symbol due to rate limiting")
+                    
+                time.sleep(delay)
+                YahooFinanceProvider._wait_for_rate_limit()
+                
+                df = YahooFinanceProvider._try_download_with_download(
+                    alt, start_date, end_date, interval, timeout=30
+                )
+                
+                if df is not None and not df.empty:
+                    logger.info(f"[Yahoo] Successfully got data using alternative symbol {alt}")
+                    break
+            
+            return df
+            
+    @classmethod
+    def get_market_data(cls, symbol, timeframe, limit=None, **kwargs):
+        """
+        Get market data for the specified symbol, timeframe and limit
+        """
+        try:
+            # Wait if needed due to rate limiting
+            YahooFinanceProvider._wait_for_rate_limit()
+            
+            # Map the timeframe to the Yahoo interval
+            interval = YahooFinanceProvider._map_timeframe_to_interval(timeframe)
+            
+            # Get the Yahoo symbol
+            yahoo_symbol = YahooFinanceProvider._map_symbol_to_yahoo(symbol)
+            
+            # Calculate the start and end dates based on the requested timeframe
+            end_date = datetime.now()
+            
+            if limit:
+                # Calculate start date based on timeframe and requested limit
+                start_date = YahooFinanceProvider._calculate_start_date(end_date, timeframe, limit)
+            else:
+                # Use a default start date if no limit is provided
+                start_date = end_date - timedelta(days=365)
+            
+            # Try to download the data using both methods with increased retry attempts
+            df = None
+            connectivity_error = False
+            rate_limit_error = False
+            
+            # Try with Ticker.history first (with extra retries)
+            for attempt in range(3):
+                if attempt > 0:
+                    logger.info(f"[Yahoo] Retry attempt {attempt} for {yahoo_symbol} with ticker.history")
+                    time.sleep(5 * attempt)  # Progressive backoff
+                    
+                df = YahooFinanceProvider._try_download_with_ticker(yahoo_symbol, start_date, end_date, interval)
+                
+                if df is not None and not df.empty:
+                    break
+                
+                # Check if we've been rate limited
+                if YahooFinanceProvider._rate_limit_hits > 3:
+                    logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
+                    time.sleep(30)  # Wait 30 seconds before trying next method
+            
+            # If that failed, try with yf.download (with extra retries)
+            if df is None or df.empty:
+                for attempt in range(3):
+                    if attempt > 0:
+                        logger.info(f"[Yahoo] Retry attempt {attempt} for {yahoo_symbol} with yf.download")
+                        time.sleep(5 * attempt)  # Progressive backoff
                         
-                        klines = await response.json()
-                        if not klines or not isinstance(klines, list):
-                            logger.error(f"[Binance Data API] Returned invalid kline data: {klines}")
-                            return None
-                        
-                        logger.info(f"[Binance Data API] Successfully retrieved {len(klines)} klines for {formatted_symbol}")
-                        
-                except aiohttp.ClientConnectorError as e:
-                    logger.error(f"[Binance Data API Connection Error] Failed to connect to {request_url}: {str(e)}")
-                    return None # Fail directly if connection error to data endpoint
-                except asyncio.TimeoutError:
-                    logger.error(f"[Binance Data API Connection Error] Timeout connecting to {request_url}")
-                    return None # Fail directly if timeout to data endpoint
+                    df = YahooFinanceProvider._try_download_with_download(yahoo_symbol, start_date, end_date, interval)
+                    
+                    if df is not None and not df.empty:
+                        break
+                    
+                    # Check if we've been rate limited
+                    if YahooFinanceProvider._rate_limit_hits > 3:
+                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
+                        time.sleep(30)  # Wait 30 seconds before trying next method
             
-            # Convert klines to dataframe
-            df = BinanceProvider._klines_to_dataframe(klines)
-            
-            # Calculate technical indicators
-            df = BinanceProvider._calculate_indicators(df)
-            
-            # Get the latest data point
-            latest = df.iloc[-1]
-            
-            # Create analysis result object
-            MarketData = namedtuple('MarketData', ['instrument', 'indicators'])
-            
-            # Extract indicators for return
-            indicators = {
-                "close": float(latest["close"]),
-                "open": float(latest["open"]),
-                "high": float(latest["high"]),
-                "low": float(latest["low"]),
-                "volume": float(latest["volume"]),
-                "EMA20": float(latest["EMA20"]),
-                "EMA50": float(latest["EMA50"]),
-                "EMA200": float(latest["EMA200"]),
-                "RSI": float(latest["RSI"]),
-                "MACD.macd": float(latest["MACD"]),
-                "MACD.signal": float(latest["MACD_signal"]),
-                "MACD.hist": float(latest["MACD_hist"]),
-            }
-            
-            standardized_indicators = BinanceProvider._standardize_indicator_names(indicators)
-            
-            week_data = df.tail(168 if binance_interval == "1h" else 42 if binance_interval == "4h" else 7 if binance_interval == "1d" else df.shape[0])
-            standardized_indicators["weekly_high"] = float(week_data["high"].max())
-            standardized_indicators["weekly_low"] = float(week_data["low"].min())
+            # If still no data, try with alternative symbols for certain instruments
+            if (df is None or df.empty) and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
+                alternatives = ["CL=F", "USO", "BNO", "UCO"]
                 
-            result = MarketData(instrument=instrument, indicators=standardized_indicators)
-            return result
+                for alt in alternatives:
+                    if alt == yahoo_symbol:
+                        continue  # Skip if it's the same as what we already tried
+                    
+                    logger.info(f"[Yahoo] Trying alternative symbol {alt} for {symbol}")
+                    time.sleep(3)  # Brief pause before trying alternative
+                    
+                    # Try both methods for each alternative
+                    df = YahooFinanceProvider._try_download_with_ticker(alt, start_date, end_date, interval)
+                    
+                    if df is None or df.empty:
+                        df = YahooFinanceProvider._try_download_with_download(alt, start_date, end_date, interval)
+                    
+                    if df is not None and not df.empty:
+                        logger.info(f"[Yahoo] Successfully got data using alternative symbol {alt}")
+                        break
+                    
+                    # Check if we've been rate limited
+                    if YahooFinanceProvider._rate_limit_hits > 3:
+                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {symbol}, will wait longer")
+                        time.sleep(30)  # Wait 30 seconds before trying next alternative
+            
+            # If still no data, return an error
+            if df is None or df.empty:
+                logger.error(f"[Yahoo] Failed to get data for {yahoo_symbol} with timeframe {timeframe}")
+                return None, {"error": "data_not_available", "message": f"Could not retrieve data for {symbol}"}
+            
+            # Process the data for our needs
+            processed_df = YahooFinanceProvider._process_dataframe(df, yahoo_symbol)
+            
+            # Ensure the limit is applied
+            if limit and len(processed_df) > limit:
+                processed_df = processed_df.tail(limit)
+            
+            # Extract indicators at the same time
+            indicators = None
+            if not processed_df.empty:
+                indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
+            
+            return processed_df, indicators
             
         except Exception as e:
-            logger.error(f"Error getting market data from Binance Data API: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None # General exception handling
-    
+            # Handle connectivity errors specifically
+            if YahooFinanceProvider._is_connectivity_error(e):
+                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
+                error_message = (
+                    f"[Yahoo] Connection error detected when trying to fetch data for {symbol}. "
+                    f"This is often caused by ad-blocking software or firewalls blocking Yahoo Finance domains. "
+                    f"Please try whitelisting these domains in your ad blocker, hosts file, or firewall: "
+                    f"{domains_list}"
+                )
+                logger.error(error_message)
+                
+                # Return an error instead of fallback data
+                return pd.DataFrame(), {"error": "connectivity", "message": error_message}
+            
+            # Handle rate limiting specifically
+            elif YahooFinanceProvider._is_rate_limit_error(e):
+                YahooFinanceProvider._handle_rate_limit_error()
+                logger.error(f"[Yahoo] Rate limit detected during data fetch for {symbol}")
+                
+                # Return an error instead of fallback data
+                return pd.DataFrame(), {"error": "rate_limit", "message": f"Rate limit exceeded for {symbol}"}
+            
+            else:
+                logger.exception(f"[Yahoo] Error fetching market data for {symbol} with timeframe {timeframe}: {str(e)}")
+                
+                # Return an error instead of fallback data
+                return pd.DataFrame(), {"error": "unknown", "message": str(e)}
+
     @staticmethod
-    async def get_ticker_price(symbol: str) -> Optional[float]:
-        """Get current ticker price for a symbol"""
-        retries = 0
-        max_retries = 3
-        
-        while retries < max_retries:
+    def get_stock_info(symbol: str) -> Optional[Dict[str, Any]]:
+        """Get detailed information about a stock"""
+        try:
+            formatted_symbol = YahooFinanceProvider._format_symbol(symbol)
+            
+            # Wait for rate limit
+            YahooFinanceProvider._wait_for_rate_limit()
+            
             try:
-                formatted_symbol = BinanceProvider._format_symbol(symbol)
-                base_url = BinanceProvider.get_base_url()
-                
-                # For ticker price, we can use the data API endpoint for better performance
-                endpoint_url = BinanceProvider.DATA_API_ENDPOINT if retries == 0 else base_url
-                endpoint = "/api/v3/ticker/price"
-                params = {"symbol": formatted_symbol}
-                
-                async with aiohttp.ClientSession() as session:
-                    headers = {}
-                    if BinanceProvider.API_KEY:
-                        headers["X-MBX-APIKEY"] = BinanceProvider.API_KEY
-                        
-                    async with session.get(f"{endpoint_url}{endpoint}", params=params, headers=headers) as response:
-                        if response.status != 200:
-                            # Try another endpoint if data API fails
-                            if retries < max_retries - 1:
-                                if retries == 0:  # If data API failed, switch to base endpoints
-                                    endpoint_url = BinanceProvider.get_base_url()
-                                else:
-                                    BinanceProvider.switch_endpoint()
-                                retries += 1
-                                continue
-                            return None
-                        
-                        data = await response.json()
-                        if "price" in data:
-                            return float(data["price"])
-                        
-                        logger.error(f"Invalid response from Binance ticker API: {data}")
-                        return None
+                ticker = yf.Ticker(formatted_symbol)
+                info = ticker.info
+                return info
             except Exception as e:
-                logger.error(f"Error getting ticker price from Binance: {str(e)}")
+                logger.error(f"[Yahoo] Error getting stock info: {str(e)}")
                 
-                # Try another endpoint
-                if retries < max_retries - 1:
-                    if retries == 0:  # If data API failed, switch to base endpoints
-                        endpoint_url = BinanceProvider.get_base_url()
-                    else:
-                        BinanceProvider.switch_endpoint()
-                    retries += 1
-                else:
-                    return None
-    
+                # Check for connectivity issues
+                if YahooFinanceProvider._is_connectivity_error(e):
+                    domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
+                    logger.error(f"[Yahoo] Connection error detected when getting stock info. "
+                                 f"This may be due to ad-blocking software or firewall. "
+                                 f"Try whitelisting these domains: {domains_list}")
+                # Check for rate limit errors
+                elif YahooFinanceProvider._is_rate_limit_error(e):
+                    YahooFinanceProvider._handle_rate_limit_error()
+                    logger.error(f"[Yahoo] Rate limit detected during get_stock_info for {symbol}")
+                
+                raise
+            
+        except Exception as e:
+            logger.error(f"[Yahoo] Error getting stock info: {str(e)}")
+            return None
+
     @staticmethod
-    async def get_account_info() -> Optional[Dict]:
-        """Get account information (requires API key and secret)"""
-        # Check if API keys are set
-        api_key = BinanceProvider.API_KEY
-        api_secret = BinanceProvider.API_SECRET
+    def _handle_rate_limit_error():
+        """Update rate limit tracking when a 429 error is detected"""
+        now = time.time()
+        YahooFinanceProvider._rate_limit_last_hit = now
+        YahooFinanceProvider._rate_limit_hits += 1
         
-        if not api_key or not api_secret:
-            logger.warning("Binance API key and secret are required for account info")
+        # Exponentially increase backoff time based on consecutive hits
+        # Cap at 5 minutes (300 seconds)
+        YahooFinanceProvider._rate_limit_backoff = min(
+            YahooFinanceProvider._rate_limit_backoff * 2,
+            300
+        )
+        
+        # Also increase the minimum delay between calls
+        YahooFinanceProvider._min_delay_between_calls = min(
+            YahooFinanceProvider._min_delay_between_calls + 1,
+            10
+        )
+        
+        logger.warning(f"[Yahoo] Rate limit hit detected. Consecutive hits: {YahooFinanceProvider._rate_limit_hits}")
+        logger.warning(f"[Yahoo] New backoff time: {YahooFinanceProvider._rate_limit_backoff} seconds")
+        
+        # Reset session if we've hit too many rate limits
+        YahooFinanceProvider._reset_session_if_needed()
+
+    @staticmethod
+    def _reset_session_if_needed():
+        """Reset the session if we've hit too many rate limits"""
+        if YahooFinanceProvider._rate_limit_hits >= 5:
+            logger.warning("[Yahoo] Too many rate limit hits, resetting session")
+            YahooFinanceProvider._session = None
+            # Create a new session
+            _ = YahooFinanceProvider._get_session()
+            # Reset the rate limit counter partially
+            YahooFinanceProvider._rate_limit_hits = max(1, YahooFinanceProvider._rate_limit_hits // 2)
+            return True
+        return False
+
+    @staticmethod
+    def _is_rate_limit_error(exception):
+        """Check if an exception is a rate limit error based on its message"""
+        error_msg = str(exception).lower()
+        rate_limit_phrases = [
+            "rate limit", 
+            "too many requests", 
+            "429", 
+            "rate limited", 
+            "try after a while"
+        ]
+        return any(phrase in error_msg for phrase in rate_limit_phrases)
+
+    @staticmethod
+    def _is_connectivity_error(exception):
+        """Check if the exception is related to connectivity issues with Yahoo domains"""
+        error_msg = str(exception).lower()
+        
+        # Check for common connection errors that might be due to ad blockers/firewalls
+        connection_error_phrases = [
+            "newconnectionerror",
+            "failed to establish a new connection",
+            "connectionerror",
+            "proxyerror",
+            "connection refused",
+            "winerror 10049",
+            "max retries exceeded",
+            "unable to connect"
+        ]
+        
+        # Check for Yahoo domains that might be blocked
+        domains_mentioned = any(domain.lower() in error_msg for domain in YahooFinanceProvider._yahoo_domains)
+        
+        # Return True if both a connection error and Yahoo domain are mentioned
+        return any(phrase in error_msg for phrase in connection_error_phrases) and domains_mentioned
+
+    @staticmethod
+    def _map_timeframe_to_interval(timeframe):
+        """Map the trading bot timeframe to Yahoo Finance interval"""
+        timeframe_mapping = {
+            "1m": "1m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "1h",
+            "4h": "1h",  # We'll resample 1h data to 4h
+            "1d": "1d",
+            "1wk": "1wk",
+            "1mo": "1mo"
+        }
+        return timeframe_mapping.get(timeframe, "1d")  # Default to daily if unknown
+
+    @staticmethod
+    def _map_symbol_to_yahoo(symbol):
+        """Map a trading bot symbol to a Yahoo Finance symbol"""
+        # Handle common mappings
+        symbol_mapping = {
+            "XAUUSD": "GC=F",  # Gold futures
+            "XAGUSD": "SI=F",  # Silver futures
+            "USOIL": "CL=F",   # Crude oil futures
+            "US30": "^DJI",    # Dow Jones Industrial Average
+            "SPX500": "^GSPC", # S&P 500
+            "NAS100": "^NDX",  # NASDAQ 100
+            "VIX": "^VIX",     # Volatility Index
+            "US500": "^GSPC",  # S&P 500 (alternative name)
+            "DE30": "^GDAXI",  # DAX
+            "UK100": "^FTSE",  # FTSE 100
+            "JP225": "^N225",  # Nikkei 225
+        }
+        
+        # Check direct mapping first
+        if symbol in symbol_mapping:
+            return symbol_mapping[symbol]
+        
+        # Handle forex pairs (e.g., EURUSD -> EURUSD=X)
+        if re.match(r'^[A-Z]{6}$', symbol):
+            return f"{symbol[:3]}{symbol[3:]}=X"
+        
+        # Handle indices that may need a caret
+        if symbol.startswith("US") or symbol.startswith("EU") or symbol.startswith("UK"):
+            if not symbol.startswith("^"):
+                return f"^{symbol}"
+        
+        # Default case: return as is
+        return symbol
+
+    @staticmethod
+    def _calculate_start_date(end_date, timeframe, limit):
+        """Calculate the start date based on the timeframe and limit"""
+        if timeframe == "1m":
+            # Yahoo only provides 7 days of 1m data
+            days = min(7, limit / 24 / 60)
+            return end_date - timedelta(days=days + 1)
+        elif timeframe == "5m":
+            # Yahoo provides 60 days of 5m data
+            days = min(60, limit * 5 / 24 / 60)
+            return end_date - timedelta(days=days + 1)
+        elif timeframe == "15m":
+            # Yahoo provides 60 days of 15m data
+            days = min(60, limit * 15 / 24 / 60)
+            return end_date - timedelta(days=days + 1)
+        elif timeframe == "30m":
+            # Yahoo provides 60 days of 30m data
+            days = min(60, limit * 30 / 24 / 60)
+            return end_date - timedelta(days=days + 1)
+        elif timeframe == "1h":
+            # Yahoo provides 730 days of 1h data
+            days = min(730, limit / 24)
+            return end_date - timedelta(days=days + 5)  # Add some buffer
+        elif timeframe == "4h":
+            # For 4h data (which is resampled from 1h), we need 4x the hours
+            days = min(730, limit * 4 / 24)
+            return end_date - timedelta(days=days + 5)
+        elif timeframe == "1d":
+            # For daily data, just add days plus some buffer for indicators
+            days = limit + 50  # Extra days for calculating indicators
+            return end_date - timedelta(days=days)
+        elif timeframe == "1wk":
+            # For weekly data
+            weeks = limit
+            return end_date - timedelta(weeks=weeks + 10)
+        elif timeframe == "1mo":
+            # For monthly data
+            days = limit * 30 + 60  # Approximate
+            return end_date - timedelta(days=days)
+        else:
+            # Default fallback - 1 year
+            return end_date - timedelta(days=365)
+
+    @staticmethod
+    def _process_dataframe(df, symbol):
+        """Process the dataframe to ensure it's in the correct format"""
+        if df is None or df.empty:
+            return pd.DataFrame()
+        
+        try:
+            # Handle potential MultiIndex columns
+            if isinstance(df.columns, pd.MultiIndex):
+                logger.info(f"[Yahoo] Processing MultiIndex DataFrame for {symbol}")
+                
+                # Get column level names
+                level_names = df.columns.names
+                logger.debug(f"[Yahoo] MultiIndex levels: {level_names}")
+                
+                # For data from yf.download with a single ticker, the structure is typically:
+                # first level: Open, High, Low, Close, etc.
+                # second level: ticker name
+                
+                # Create a new DataFrame with standard column names
+                if len(df.columns.levels) >= 2:
+                    # Get all unique column types from first level
+                    col_types = df.columns.levels[0].tolist()
+                    
+                    # Create new flat DataFrame
+                    new_df = pd.DataFrame(index=df.index)
+                    
+                    for col_type in col_types:
+                        # Get the values for this column type (e.g., all 'Open' values)
+                        if (col_type, symbol) in df.columns:
+                            new_df[col_type] = df[(col_type, symbol)]
+                        # Try using the first ticker if symbol specific column not found
+                        elif len(df.columns.levels[1]) > 0:
+                            ticker = df.columns.levels[1][0]
+                            if (col_type, ticker) in df.columns:
+                                new_df[col_type] = df[(col_type, ticker)]
+                    
+                    # Use the new DataFrame
+                    df = new_df
+                    logger.info(f"[Yahoo] Successfully flattened MultiIndex DataFrame to {list(df.columns)}")
+            
+            # Ensure standard column names
+            standard_columns = {'Open', 'High', 'Low', 'Close', 'Volume'}
+            actual_columns = set(df.columns)
+            
+            # Check if we need to rename columns (case insensitive)
+            rename_map = {}
+            for std_col in standard_columns:
+                for actual_col in actual_columns:
+                    if std_col.lower() == actual_col.lower() and std_col != actual_col:
+                        rename_map[actual_col] = std_col
+            
+            # Apply renaming if needed
+            if rename_map:
+                df = df.rename(columns=rename_map)
+                logger.info(f"[Yahoo] Renamed columns: {rename_map}")
+            
+            # Handle 4h timeframe resampling if needed
+            if getattr(df, '_timeframe', None) == '4h' or getattr(df, 'interval', None) == '4h':
+                logger.info(f"[Yahoo] Resampling 1h data to 4h for {symbol}")
+                try:
+                    # Create a dict of column mappings for aggregation
+                    agg_dict = {
+                        'Open': 'first',
+                        'High': 'max',
+                        'Low': 'min',
+                        'Close': 'last'
+                    }
+                    if 'Volume' in df.columns:
+                        agg_dict['Volume'] = 'sum'
+                        
+                    # Resample to 4h
+                    df = df.resample('4h').agg(agg_dict)
+                    df.dropna(inplace=True)
+                    logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df.shape}")
+                except Exception as e:
+                    logger.error(f"[Yahoo] Error resampling to 4h: {str(e)}")
+                    # Continue with 1h data if resampling fails
+            
+            # Ensure the DataFrame has a proper datetime index
+            if not isinstance(df.index, pd.DatetimeIndex):
+                try:
+                    df.index = pd.to_datetime(df.index)
+                    logger.info(f"[Yahoo] Converted index to DatetimeIndex")
+                except Exception as e:
+                    logger.error(f"[Yahoo] Error converting index to datetime: {str(e)}")
+            
+            # Sort the DataFrame by date (ascending)
+            df = df.sort_index()
+            
+            # Drop any NaN rows
+            df = df.dropna()
+            
+            return df
+        except Exception as e:
+            logger.error(f"[Yahoo] Error processing DataFrame: {str(e)}")
+            logger.error(traceback.format_exc())
+            return pd.DataFrame()
+
+    @staticmethod
+    def _extract_indicators_from_dataframe(df):
+        """Extract indicators from the DataFrame's last row"""
+        if df is None or df.empty:
             return None
         
-        # Log that we have API credentials
-        logger.info(f"Using Binance API key: {api_key[:5]}...{api_key[-5:]}")
-        
-        retries = 0
-        max_retries = 3
-        
-        while retries < max_retries:    
-            try:
-                timestamp = int(time.time() * 1000)
-                params = {
-                    "timestamp": timestamp,
-                    "recvWindow": 5000  # Specify the receiving window
-                }
+        try:
+            # Create indicators dictionary with basic OHLCV data
+            indicators = {
+                'open': float(df['Open'].iloc[-1]),
+                'high': float(df['High'].iloc[-1]),
+                'low': float(df['Low'].iloc[-1]),
+                'close': float(df['Close'].iloc[-1]),
+                'volume': float(df['Volume'].iloc[-1]) if 'Volume' in df.columns else 0
+            }
+            
+            # Add EMAs if we have enough data
+            if len(df) >= 20:
+                df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+                indicators['EMA20'] = float(df['EMA20'].iloc[-1])
+            
+            if len(df) >= 50:
+                df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+                indicators['EMA50'] = float(df['EMA50'].iloc[-1])
                 
-                # Generate signature
-                query_string = urlencode(params)
-                signature = hmac.new(
-                    api_secret.encode('utf-8'),
-                    query_string.encode('utf-8'),
-                    hashlib.sha256
-                ).hexdigest()
-                
-                endpoint = "/api/v3/account"
-                base_url = BinanceProvider.get_base_url()
-                
-                # Log important details for debugging 
-                logger.info(f"Using base URL: {base_url}")
-                
-                async with aiohttp.ClientSession() as session:
-                    headers = {"X-MBX-APIKEY": api_key}
-                    
-                    url = f"{base_url}{endpoint}?{query_string}&signature={signature}"
-                    logger.info(f"Full URL (signature truncated): {url[:100]}...")
-                    
-                    async with session.get(url, headers=headers) as response:
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(f"Binance API error: {response.status}, Response: {error_text}")
-                            
-                            # Try another endpoint
-                            if retries < max_retries - 1:
-                                BinanceProvider.switch_endpoint()
-                                retries += 1
-                                continue
-                            return None
-                        
-                        data = await response.json()
-                        if "code" in data and "msg" in data:
-                            logger.error(f"Binance API error: {data['msg']} (Code: {data['code']})")
-                            return None
-                            
-                        # Log success
-                        logger.info("Successfully retrieved account information from Binance API")
-                        return data
-            except Exception as e:
-                logger.error(f"Error getting account info from Binance: {str(e)}")
-                logger.error(traceback.format_exc())
-                
-                # Try another endpoint
-                if retries < max_retries - 1:
-                    BinanceProvider.switch_endpoint()
-                    retries += 1
-                else:
-                    return None
-    
+            if len(df) >= 200:
+                df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
+                indicators['EMA200'] = float(df['EMA200'].iloc[-1])
+            
+            # Calculate RSI
+            if len(df) >= 14:
+                delta = df['Close'].diff()
+                gain = delta.where(delta > 0, 0)
+                loss = -delta.where(delta < 0, 0)
+                avg_gain = gain.rolling(window=14).mean()
+                avg_loss = loss.rolling(window=14).mean()
+                rs = avg_gain / avg_loss
+                df['RSI'] = 100 - (100 / (1 + rs))
+                indicators['RSI'] = float(df['RSI'].iloc[-1])
+            
+            # Calculate MACD
+            if len(df) >= 26:
+                df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+                df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+                df['MACD'] = df['EMA12'] - df['EMA26']
+                df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+                indicators['MACD'] = float(df['MACD'].iloc[-1])
+                indicators['MACD_signal'] = float(df['MACD_signal'].iloc[-1])
+                indicators['MACD_hist'] = indicators['MACD'] - indicators['MACD_signal']
+            
+            return indicators
+            
+        except Exception as e:
+            logger.error(f"[Yahoo] Error extracting indicators: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+
     @staticmethod
-    def _klines_to_dataframe(klines: List) -> pd.DataFrame:
-        """Convert Binance klines to pandas DataFrame"""
-        # Binance kline format: 
-        # [Open time, Open, High, Low, Close, Volume, Close time, Quote asset volume, 
-        # Number of trades, Taker buy base asset volume, Taker buy quote asset volume, Ignore]
-        df = pd.DataFrame(klines, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume', 
-            'close_time', 'quote_volume', 'trades', 'taker_base_volume', 
-            'taker_quote_volume', 'ignore'
-        ])
+    def _generate_fallback_data(symbol, timeframe, limit=100):
+        """Generate fallback data when Yahoo Finance API is unavailable due to rate limiting"""
+        logger.warning(f"[Yahoo] Generating fallback data for {symbol} with timeframe {timeframe}")
         
-        # Convert types
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df['open'] = pd.to_numeric(df['open'])
-        df['high'] = pd.to_numeric(df['high'])
-        df['low'] = pd.to_numeric(df['low'])
-        df['close'] = pd.to_numeric(df['close'])
-        df['volume'] = pd.to_numeric(df['volume'])
+        # Get current time
+        end_time = datetime.now()
         
-        # Set timestamp as index
-        df.set_index('timestamp', inplace=True)
+        # Map timeframe to timedelta
+        if timeframe == '1m':
+            delta = timedelta(minutes=1)
+        elif timeframe == '5m':
+            delta = timedelta(minutes=5)
+        elif timeframe == '15m':
+            delta = timedelta(minutes=15)
+        elif timeframe == '30m':
+            delta = timedelta(minutes=30)
+        elif timeframe == '1h':
+            delta = timedelta(hours=1)
+        elif timeframe == '4h':
+            delta = timedelta(hours=4)
+        elif timeframe == '1d':
+            delta = timedelta(days=1)
+        elif timeframe == '1wk':
+            delta = timedelta(weeks=1)
+        else:  # Default to 1d
+            delta = timedelta(days=1)
         
-        return df
-    
-    @staticmethod
-    def _calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate technical indicators"""
-        # Calculate EMAs
-        df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()  # Add EMA20
-        df['EMA50'] = df['close'].ewm(span=50, adjust=False).mean()
-        df['EMA200'] = df['close'].ewm(span=200, adjust=False).mean()
+        # Create a date range for the requested period
+        dates = [end_time - (i * delta) for i in range(limit)]
+        dates.reverse()  # Oldest first
+        
+        # Determine base price based on symbol
+        base_price = 80.0  # Default value for USOIL/CL=F
+        
+        if symbol in ["GC=F", "XAUUSD"]:  # Gold
+            base_price = 1900.0
+        elif symbol in ["SI=F", "XAGUSD"]:  # Silver
+            base_price = 25.0
+        elif symbol in ["CL=F", "USOIL", "XTIUSD", "WTIUSD"]:  # Oil
+            base_price = 75.0
+        elif symbol in ["^DJI", "US30"]:  # Dow Jones
+            base_price = 39000.0
+        elif symbol in ["^GSPC", "US500", "SPX500"]:  # S&P 500
+            base_price = 5200.0
+        elif symbol in ["^NDX", "US100", "NAS100"]:  # Nasdaq 100
+            base_price = 18200.0
+        elif symbol == "EURUSD=X" or symbol == "EURUSD":
+            base_price = 1.08
+        elif symbol == "GBPUSD=X" or symbol == "GBPUSD":
+            base_price = 1.25
+        elif symbol == "USDJPY=X" or symbol == "USDJPY":
+            base_price = 155.0
+        
+        # Generate price data with some random walk
+        close_prices = []
+        current_price = base_price
+        
+        for _ in range(limit):
+            # Add small random change
+            change = current_price * np.random.normal(0, 0.005)  # 0.5% standard deviation
+            current_price += change
+            close_prices.append(current_price)
+        
+        # Create dataframe with proper index
+        df = pd.DataFrame(index=dates)
+        df.index.name = 'Date'
+        
+        # Create OHLC based on the close prices
+        df['Close'] = close_prices
+        df['Open'] = df['Close'].shift(1)
+        # For the first row, open = close
+        df.loc[df.index[0], 'Open'] = df.loc[df.index[0], 'Close']
+        
+        # High is slightly above the max of open/close
+        df['High'] = df[['Open', 'Close']].max(axis=1) * (1 + abs(np.random.normal(0, 0.002, size=len(df))))
+        
+        # Low is slightly below the min of open/close
+        df['Low'] = df[['Open', 'Close']].min(axis=1) * (1 - abs(np.random.normal(0, 0.002, size=len(df))))
+        
+        # Add some volume
+        df['Volume'] = np.random.randint(1000, 10000, size=len(df))
+        
+        # Fill any NA values
+        df = df.fillna(method='ffill')
+        
+        # Add some technical indicators that might be used
+        if len(df) >= 20:
+            df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+            
+        if len(df) >= 50:
+            df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+            
+        if len(df) >= 200:
+            df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
         
         # Calculate RSI
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
-        
-        rs = avg_gain / avg_loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        if len(df) >= 14:
+            delta = df['Close'].diff()
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            avg_gain = gain.rolling(window=14).mean()
+            avg_loss = loss.rolling(window=14).mean()
+            rs = avg_gain / avg_loss
+            df['RSI'] = 100 - (100 / (1 + rs))
         
         # Calculate MACD
-        df['EMA12'] = df['close'].ewm(span=12, adjust=False).mean()
-        df['EMA26'] = df['close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = df['EMA12'] - df['EMA26']
-        df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_hist'] = df['MACD'] - df['MACD_signal']
-        
-        # Clean NaN values
-        df.fillna(0, inplace=True)
+        if len(df) >= 26:
+            df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+            df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+            df['MACD'] = df['EMA12'] - df['EMA26']
+            df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         
         return df
-    
-    @staticmethod
-    def _format_symbol(instrument: str) -> str:
-        """Format instrument symbol for Binance API"""
-        logger.info(f"[Binance] Formatting symbol: {instrument}")
-        
-        # Ensure uppercase and remove slashes
-        instrument = instrument.upper().replace("/", "")
-        
-        # Make sure crypto symbols end with USDT for Binance
-        if instrument.endswith("USD") and not instrument.endswith("USDT"):
-            instrument = instrument.replace("USD", "USDT")
-            logger.info(f"[Binance] Converted USD to USDT: {instrument}")
-        
-        # Handle common crypto symbols without USD suffix (e.g., BTC -> BTCUSDT)
-        common_crypto_symbols = ["BTC", "ETH", "XRP", "DOT", "ADA", "SOL", "DOGE", "AVAX", "MATIC"]
-        if instrument in common_crypto_symbols:
-            instrument = f"{instrument}USDT"
-            logger.info(f"[Binance] Added USDT suffix to common crypto: {instrument}")
-        
-        logger.info(f"[Binance] Final formatted symbol: {instrument}")
-        return instrument
-    
-    @staticmethod
-    async def create_order(symbol: str, side: str, order_type: str, quantity: float, price: float = None, 
-                           time_in_force: str = "GTC") -> Optional[Dict]:
-        """
-        Create and execute an order on Binance
-
-        Args:
-            symbol: Trading pair (e.g., BTCUSDT)
-            side: Order side (BUY or SELL)
-            order_type: Order type (LIMIT, MARKET, STOP_LOSS, etc.)
-            quantity: Order quantity
-            price: Order price (required for LIMIT orders)
-            time_in_force: Time in force (GTC, IOC, FOK)
-
-        Returns:
-            Optional[Dict]: Order response or None if failed
-        """
-        # Check if API keys are set
-        api_key = BinanceProvider.API_KEY
-        api_secret = BinanceProvider.API_SECRET
-        
-        if not api_key or not api_secret:
-            logger.warning("Binance API key and secret are required for creating orders")
-            return None
-        
-        # Format symbol
-        formatted_symbol = BinanceProvider._format_symbol(symbol)
-        
-        # Prepare parameters
-        params = {
-            "symbol": formatted_symbol,
-            "side": side.upper(),
-            "type": order_type.upper(),
-            "quantity": quantity,
-            "timestamp": int(time.time() * 1000),
-            "recvWindow": 5000  # Specify the receiving window
-        }
-        
-        # Add price if it's a limit order
-        if order_type.upper() == "LIMIT" and price is not None:
-            params["price"] = price
-            params["timeInForce"] = time_in_force
-        
-        retries = 0
-        max_retries = 3
-        
-        while retries < max_retries:
-            try:
-                # Generate signature
-                query_string = urlencode(params)
-                signature = hmac.new(
-                    api_secret.encode('utf-8'),
-                    query_string.encode('utf-8'),
-                    hashlib.sha256
-                ).hexdigest()
-                
-                # Prepare endpoint
-                endpoint = "/api/v3/order"
-                base_url = BinanceProvider.get_base_url()
-                
-                logger.info(f"Creating {side.upper()} {order_type.upper()} order for {formatted_symbol}")
-                
-                # Execute order
-                async with aiohttp.ClientSession() as session:
-                    headers = {"X-MBX-APIKEY": api_key}
-                    
-                    url = f"{base_url}{endpoint}"
-                    full_params = f"{query_string}&signature={signature}"
-                    
-                    logger.info(f"Sending order to {url} (params truncated): {full_params[:50]}...")
-                    
-                    async with session.post(url, data=full_params, headers=headers) as response:
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(f"Binance API error: {response.status}, Response: {error_text}")
-                            
-                            # Try another endpoint
-                            if retries < max_retries - 1:
-                                BinanceProvider.switch_endpoint()
-                                retries += 1
-                                continue
-                            return None
-                        
-                        data = await response.json()
-                        if "code" in data and "msg" in data:
-                            logger.error(f"Binance API error: {data['msg']} (Code: {data['code']})")
-                            return None
-                        
-                        logger.info(f"Successfully created order: {data.get('orderId', 'Unknown')} for {formatted_symbol}")
-                        return data
-                        
-            except Exception as e:
-                logger.error(f"Error creating order on Binance: {str(e)}")
-                logger.error(traceback.format_exc())
-                
-                # Try another endpoint
-                if retries < max_retries - 1:
-                    BinanceProvider.switch_endpoint()
-                    retries += 1
-                else:
-                    return None 
-
-    @staticmethod
-    def _standardize_indicator_names(indicators: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Standardize indicator names for compatibility with chart service.
-        Adds lowercase versions with underscores for all indicators.
-        
-        Args:
-            indicators: Dictionary with original indicator names
-            
-        Returns:
-            Dict: Dictionary with both original and standardized names
-        """
-        result = indicators.copy()  # Keep original names
-        
-        # Add standardized versions (lowercase with underscores)
-        mapping = {
-            "EMA20": "ema_20",
-            "EMA50": "ema_50", 
-            "EMA200": "ema_200",
-            "RSI": "rsi",
-            "MACD.macd": "macd",
-            "MACD.signal": "macd_signal",
-            "MACD.hist": "macd_hist"
-        }
-        
-        # Add all standardized versions
-        for orig_key, std_key in mapping.items():
-            if orig_key in indicators:
-                result[std_key] = indicators[orig_key]
-        
-        return result 
