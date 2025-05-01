@@ -14,6 +14,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import yfinance as yf
 import numpy as np
 from cachetools import TTLCache
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -794,48 +797,162 @@ class YahooFinanceProvider:
     
     @staticmethod
     def _format_symbol(instrument: str, is_crypto: bool, is_commodity: bool) -> str:
-        """Format instrument symbol for Yahoo Finance API"""
-        instrument = instrument.upper().replace("/", "")
+        """Format the instrument for Yahoo Finance API"""
+        # Special cases
+        if instrument == "EURUSD":
+            return "EURUSD=X"
+        elif instrument == "GBPUSD":
+            return "GBPUSD=X"
+        elif instrument == "USDJPY":
+            return "USDJPY=X"
+        elif instrument == "XAUUSD":  # Gold
+            return "GC=F"
+        elif instrument == "XTIUSD" or instrument == "USOIL":  # Oil
+            return "CL=F"
+        elif instrument == "XBRUSD":  # Brent oil
+            return "BZ=F"
+        elif instrument == "XAGUSD":  # Silver
+            return "SI=F"
+        elif instrument == "US30":
+            return "^DJI"  # Dow Jones
+        elif instrument == "US500":
+            return "^GSPC"  # S&P 500
+        elif instrument == "US100":
+            return "^NDX"  # Nasdaq 100
+        elif instrument == "DE40":
+            return "^GDAXI"  # DAX
+        elif instrument == "UK100":
+            return "^FTSE"  # FTSE 100
+        elif instrument == "JP225":
+            return "^N225"  # Nikkei 225
+        elif instrument == "AU200":
+            return "^AXJO"  # ASX 200
+        elif instrument == "BTCUSD":
+            return "BTC-USD"
+        elif instrument == "ETHUSD":
+            return "ETH-USD"
         
-        # For forex (EURUSD -> EUR=X)
-        if len(instrument) == 6 and all(c.isalpha() for c in instrument):
-            base = instrument[:3]
-            quote = instrument[3:]
-            return f"{base}{quote}=X"
-            
-        # For commodities - using correct futures contract symbols
-        if instrument == "XAUUSD":
-            return "GC=F"  # Gold futures
-        elif instrument == "XAGUSD":
-            return "SI=F"  # Silver futures (not SL=F)
-        elif instrument in ["XTIUSD", "WTIUSD"]:
-            return "CL=F"  # WTI Crude Oil futures
-        elif instrument == "XBRUSD":
-            return "BZ=F"  # Brent Crude Oil futures
-        elif instrument == "XPDUSD":
-            return "PA=F"  # Palladium futures
-        elif instrument == "XPTUSD":
-            return "PL=F"  # Platinum futures
-        elif instrument == "NATGAS":
-            return "NG=F"  # Natural Gas futures
-        elif instrument == "COPPER":
-            return "HG=F"  # Copper futures
+        # Add suffix for forex pairs
+        if len(instrument) == 6 and not is_crypto and not is_commodity:
+            return f"{instrument}=X"
         
-        # For indices
-        if any(index in instrument for index in ["US30", "US500", "US100", "UK100", "DE40", "JP225"]):
-            indices_map = {
-                "US30": "^DJI",     # Dow Jones
-                "US500": "^GSPC",   # S&P 500
-                "US100": "^NDX",    # Nasdaq 100
-                "UK100": "^FTSE",   # FTSE 100
-                "DE40": "^GDAXI",   # DAX
-                "JP225": "^N225",   # Nikkei 225
-                "AU200": "^AXJO",   # ASX 200
-                "EU50": "^STOXX50E", # Euro Stoxx 50
-                "FR40": "^FCHI",    # CAC 40
-                "HK50": "^HSI"      # Hang Seng
-            }
-            return indices_map.get(instrument, instrument)
-                
         # Default: return as is
         return instrument 
+
+    @staticmethod
+    def get_chart(instrument: str, timeframe: str = "1h", fullscreen: bool = False) -> Optional[bytes]:
+        """Generate a chart for the given instrument using matplotlib.
+        
+        Args:
+            instrument: The instrument symbol (e.g., EURUSD, XAUUSD)
+            timeframe: The timeframe for the chart (e.g., 1h, 4h, 1d)
+            fullscreen: Whether to generate a larger chart
+            
+        Returns:
+            Bytes of the PNG image, or None if generation fails
+        """
+        try:
+            # Map the instrument to Yahoo Finance symbol
+            yahoo_symbol = YahooFinanceProvider._format_symbol(instrument, 
+                                                              is_crypto=instrument.startswith('BTC') or instrument.startswith('ETH'),
+                                                              is_commodity=instrument.startswith('XAU') or instrument.startswith('XTI'))
+            
+            # Map timeframe to Yahoo Finance interval
+            interval = YahooFinanceProvider._map_timeframe_to_yfinance(timeframe)
+            if not interval:
+                logger.error(f"Invalid timeframe: {timeframe}")
+                return None
+                
+            # Determine start date based on timeframe
+            end_date = datetime.now()
+            
+            # How many candles to show
+            num_candles = 100
+            if timeframe == "1h":
+                start_date = end_date - timedelta(days=7)  # A week of hourly data
+            elif timeframe == "4h":
+                start_date = end_date - timedelta(days=30)  # A month of 4-hour data
+            elif timeframe == "1d":
+                start_date = end_date - timedelta(days=200)  # 200 days of daily data
+            else:
+                start_date = end_date - timedelta(days=30)  # Default to a month
+            
+            # Get the data
+            logger.info(f"Getting data for chart: {yahoo_symbol} ({interval}) from {start_date.date()} to {end_date.date()}")
+            data = yf.download(
+                yahoo_symbol,
+                start=start_date,
+                end=end_date,
+                interval=interval,
+                progress=False
+            )
+            
+            if data.empty:
+                logger.error(f"No data returned for {yahoo_symbol}")
+                return None
+                
+            # Limit to the last 'num_candles' for better visualization
+            data = data.tail(num_candles)
+            
+            # Generate a nice looking chart with matplotlib
+            logger.info(f"Generating matplotlib chart for {instrument} with {len(data)} rows")
+            
+            # Create figure with a nice size
+            figsize = (12, 8) if fullscreen else (10, 6)
+            fig, ax = plt.subplots(figsize=figsize)
+            
+            # Plot the close price
+            data['Close'].plot(ax=ax, color='blue', linewidth=1.5)
+            
+            # Add some EMAs
+            data['EMA20'] = data['Close'].ewm(span=20, adjust=False).mean()
+            data['EMA50'] = data['Close'].ewm(span=50, adjust=False).mean()
+            data['EMA20'].plot(ax=ax, color='orange', linewidth=1.0, label='EMA 20')
+            data['EMA50'].plot(ax=ax, color='red', linewidth=1.0, label='EMA 50')
+            
+            # Set title and labels
+            ax.set_title(f"{instrument} - {timeframe} Chart", fontsize=14)
+            ax.set_xlabel('Date', fontsize=12)
+            ax.set_ylabel('Price', fontsize=12)
+            
+            # Add grid for better readability
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend
+            ax.legend()
+            
+            # Format x-axis dates better
+            fig.autofmt_xdate()
+            
+            # Add current price annotation at the last point
+            last_price = float(data['Close'].iloc[-1].item())  # Convert to scalar first then float
+            last_date = data.index[-1]
+            price_text = f'${last_price:.4f}'
+            
+            ax.annotate(price_text,
+                        xy=(last_date, last_price),
+                        xytext=(0, 10),
+                        textcoords='offset points',
+                        fontsize=10,
+                        backgroundcolor='white',
+                        bbox=dict(boxstyle='round,pad=0.3', edgecolor='gray', facecolor='white', alpha=0.7))
+            
+            # Make it look nice
+            plt.tight_layout()
+            
+            # Save to BytesIO buffer
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=100)
+            plt.close(fig)
+            
+            # Get the image data
+            buf.seek(0)
+            image_data = buf.getvalue()
+            
+            logger.info(f"Chart generated successfully for {instrument}: {len(image_data)} bytes")
+            return image_data
+            
+        except Exception as e:
+            logger.error(f"Error generating chart for {instrument}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
