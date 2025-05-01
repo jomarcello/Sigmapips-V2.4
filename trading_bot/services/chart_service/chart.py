@@ -348,7 +348,9 @@ class ChartService:
             logger.info(f"Generating random chart for {instrument} with timeframe {timeframe}")
             
             # Bepaal de tijdsperiode op basis van timeframe
-            end_date = datetime.now()
+            # Gebruik gisteren als einddatum om toekomstige datums te voorkomen
+            end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            
             if timeframe == "1h":
                 start_date = end_date - timedelta(days=7)
                 periods = 168  # 7 dagen * 24 uur
@@ -361,6 +363,8 @@ class ChartService:
             else:
                 start_date = end_date - timedelta(days=7)
                 periods = 168
+                
+            logger.info(f"Generated chart date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
             
             # Genereer wat willekeurige data als voorbeeld
             np.random.seed(42)  # Voor consistente resultaten
@@ -2078,13 +2082,16 @@ class ChartService:
             try:
                 # Create a task with a timeout to prevent hanging indefinitely
                 task = asyncio.create_task(YahooFinanceProvider.get_market_data(yahoo_symbol, "1h", limit=10))
-                df = await asyncio.wait_for(task, timeout=30.0)  # Longer 30-second timeout to get data
+                result = await asyncio.wait_for(task, timeout=30.0)  # Longer 30-second timeout to get data
                 
-                if df is not None and hasattr(df, 'indicators') and 'close' in df.indicators:
-                    price = df.indicators['close']
-                    logger.info(f"Got {symbol} price from Yahoo Finance: {price}")
-                    # Always return Yahoo Finance price directly, no matter what the value is
-                    return price
+                # Handle the new return format (dataframe, indicators dictionary)
+                if result is not None and isinstance(result, tuple) and len(result) == 2:
+                    df, indicators = result
+                    if df is not None and indicators is not None and 'close' in indicators:
+                        price = indicators['close']
+                        logger.info(f"Got {symbol} price from Yahoo Finance: {price}")
+                        # Always return Yahoo Finance price directly, no matter what the value is
+                        return price
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout fetching {symbol} price from Yahoo Finance after 30 seconds")
                 return None
