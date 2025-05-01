@@ -645,10 +645,11 @@ class YahooFinanceProvider:
         elif instrument == "XAGUSD":
             return "SI=F"  # Silver futures (not SL=F)
         elif instrument in ["XTIUSD", "WTIUSD", "USOIL"]:
-            # Try alternative oil symbols if CL=F is experiencing issues
-            return "USO"  # United States Oil Fund - more reliable than CL=F
+            # Try multiple alternative oil symbols - much more reliable approach
+            # We'll try these symbols in sequence in the get_market_data method
+            return "CL=F,BNO,UCO,OIL,XLE"  # Primary symbol is CL=F (WTI Crude Futures)
         elif instrument == "XBRUSD":
-            return "BZ=F"  # Brent Crude Oil futures
+            return "BZ=F,BNO,OIL"  # Brent Crude Oil futures and alternatives
         elif instrument == "XPDUSD":
             return "PA=F"  # Palladium futures
         elif instrument == "XPTUSD":
@@ -852,6 +853,39 @@ class YahooFinanceProvider:
             # Is this a commodity?
             is_commodity = any(commodity in symbol.upper() for commodity in ["XAUUSD", "XAGUSD", "XTIUSD", "WTIUSD", "USOIL", "XBRUSD"])
             
+            # For oil commodities that return multiple tickers, try each one sequentially
+            if is_commodity and "," in formatted_symbol:
+                logger.info(f"[Yahoo] Multiple tickers configured for {symbol}: {formatted_symbol}")
+                
+                # Split the configured tickers and try each one
+                ticker_options = formatted_symbol.split(",")
+                
+                for ticker_option in ticker_options:
+                    ticker_option = ticker_option.strip()
+                    logger.info(f"[Yahoo] Trying alternative ticker for {symbol}: {ticker_option}")
+                    
+                    try:
+                        # Try to get data with this ticker
+                        df = await YahooFinanceProvider._try_get_market_data(
+                            ticker_option, 
+                            symbol, 
+                            timeframe, 
+                            limit
+                        )
+                        
+                        if df is not None and not df.empty:
+                            logger.info(f"[Yahoo] Successfully got data using ticker {ticker_option} for {symbol}")
+                            return df
+                        else:
+                            logger.warning(f"[Yahoo] Failed to get data using ticker {ticker_option} for {symbol}, trying next option")
+                    
+                    except Exception as e:
+                        logger.warning(f"[Yahoo] Error with ticker {ticker_option} for {symbol}: {str(e)}, trying next option")
+                
+                # If we get here, all tickers failed
+                logger.error(f"[Yahoo] All ticker options failed for {symbol}")
+                return None
+            
             # NO FALLBACK: Reset circuit breaker for this symbol to always retry
             # This disables the circuit breaker for all symbols
             if formatted_symbol in YahooFinanceProvider._circuit_breaker:
@@ -861,6 +895,23 @@ class YahooFinanceProvider:
                     "consecutive_failures": 0
                 }
             
+            # For non-oil or single ticker, use the normal approach
+            return await YahooFinanceProvider._try_get_market_data(
+                formatted_symbol, 
+                symbol, 
+                timeframe, 
+                limit
+            )
+                
+        except Exception as e:
+            logger.error(f"Error getting market data from Yahoo Finance: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+
+    @staticmethod
+    async def _try_get_market_data(formatted_symbol: str, original_symbol: str, timeframe: str, limit: int) -> Optional[pd.DataFrame]:
+        """Helper method to try fetching data for a specific symbol and timeframe"""
+        try:
             # Convert timeframe to Yahoo Finance interval
             if timeframe == "1m":
                 interval = "1m"
@@ -926,7 +977,7 @@ class YahooFinanceProvider:
             
             # INCREASED MAX RETRIES FOR DOWNLOAD: Never give up, keep trying to get real data
             success = False
-            max_attempts = 10  # Increased from the standard 3 attempts
+            max_attempts = 5  # Reduced from 10 to 5 attempts per ticker since we now try multiple tickers
             attempt = 0
             df = None
             
@@ -943,14 +994,14 @@ class YahooFinanceProvider:
                         end_date,
                         interval,
                         timeout=60,  # INCREASED TIMEOUT to 60 seconds
-                        original_symbol=symbol  # Pass original for reference
+                        original_symbol=original_symbol  # Pass original for reference
                     )
                     
                     if df is not None and not df.empty:
-                        logger.info(f"[Yahoo] Successfully downloaded data for {symbol} with shape {df.shape}")
+                        logger.info(f"[Yahoo] Successfully downloaded data for {original_symbol} with shape {df.shape}")
                         success = True
                     else:
-                        logger.warning(f"[Yahoo] Attempt {attempt}/{max_attempts}: No data returned for {symbol} ({formatted_symbol})")
+                        logger.warning(f"[Yahoo] Attempt {attempt}/{max_attempts}: No data returned for {original_symbol} ({formatted_symbol})")
                         
                         # Increase delay between attempts
                         backoff_seconds = attempt * 5  # 5, 10, 15, ... seconds
@@ -958,7 +1009,7 @@ class YahooFinanceProvider:
                         await asyncio.sleep(backoff_seconds)
                         
                 except Exception as e:
-                    logger.error(f"[Yahoo] Attempt {attempt}/{max_attempts}: Error downloading data for {symbol}: {str(e)}")
+                    logger.error(f"[Yahoo] Attempt {attempt}/{max_attempts}: Error downloading data for {original_symbol}: {str(e)}")
                     
                     # Increase delay between attempts
                     backoff_seconds = attempt * 5  # 5, 10, 15, ... seconds
@@ -967,15 +1018,15 @@ class YahooFinanceProvider:
             
             # After all attempts, if we still don't have data, we have to return None
             if df is None or df.empty:
-                logger.error(f"[Yahoo] Failed to get data for {symbol} after {max_attempts} attempts")
+                logger.error(f"[Yahoo] Failed to get data for {original_symbol} after {max_attempts} attempts")
                 return None
                 
             # Validate and clean the data
-            df = YahooFinanceProvider._validate_and_clean_data(df, symbol)
+            df = YahooFinanceProvider._validate_and_clean_data(df, original_symbol)
             
             # For 4h timeframe, resample from 1h
             if timeframe == "4h":
-                logger.info(f"[Yahoo] Resampling 1h data to 4h for {symbol}")
+                logger.info(f"[Yahoo] Resampling 1h data to 4h for {original_symbol}")
                 try:
                     # Resample to 4h
                     df = df.resample('4h').agg({
@@ -1044,12 +1095,12 @@ class YahooFinanceProvider:
             result.indicators = indicators
             
             # Log success
-            logger.info(f"[Yahoo] Successfully processed data for {symbol} on {timeframe}, returned {len(result)} rows")
+            logger.info(f"[Yahoo] Successfully processed data for {original_symbol} on {timeframe}, returned {len(result)} rows")
             
             return result
                 
         except Exception as e:
-            logger.error(f"Error getting market data from Yahoo Finance: {str(e)}")
+            logger.error(f"Error processing market data for {original_symbol}: {str(e)}")
             logger.error(traceback.format_exc())
             return None
 
