@@ -2,7 +2,7 @@ import logging
 import traceback
 import asyncio
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List, Union
 import time
 import pandas as pd
 from datetime import datetime, timedelta
@@ -16,6 +16,8 @@ import functools
 import numpy as np
 import pytz
 import re
+import requests_cache
+from requests_ratelimiter import LimiterSession
 
 logger = logging.getLogger(__name__)
 
@@ -58,847 +60,393 @@ user_agents = [
 ]
 
 class YahooFinanceProvider:
-    """Provider class for Yahoo Finance API integration with simplified error handling"""
+    """Provider class voor Yahoo Finance API met verbeterde rate limit afhandeling en caching"""
     
-    # Keep track of last API call time to manage rate limiting
-    _last_api_call = 0
-    _min_delay_between_calls = 2  # Start with 2 seconds minimum delay
+    # Cache configuratie (1 uur cache voor Yahoo Finance data)
     _session = None
+    _initialized = False
     
-    # Add rate limit tracking
-    _rate_limit_hits = 0
-    _rate_limit_last_hit = 0
-    _rate_limit_backoff = 5  # Start with 5 seconds, will increase on consecutive hits
-    
-    # Add more diverse and modern user agents to rotate through
+    # Moderne user agents om blokkades te vermijden
     _user_agents = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 OPR/110.0.0.0',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
     ]
     
-    # Add domains that may need to be whitelisted
-    _yahoo_domains = [
-        "fc.yahoo.com",
-        "query2.finance.yahoo.com", 
-        "query1.finance.yahoo.com"
-    ]
-
-    @staticmethod
-    def _get_session():
-        """Get or create a requests session with retry logic"""
-        if YahooFinanceProvider._session is None:
-            session = requests.Session()
-            
-            # Configure retry strategy
-            retries = Retry(
-                total=3, 
-                backoff_factor=1.0,
-                status_forcelist=[429, 500, 502, 503, 504]
-            )
-            adapter = HTTPAdapter(max_retries=retries)
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            
-            # Use a random user agent for the session
-            user_agent = random.choice(YahooFinanceProvider._user_agents)
-            
-            session.headers.update({
-                'User-Agent': user_agent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Cache-Control': 'max-age=0',
-                'Connection': 'keep-alive'
-            })
-            
-            # Try to get initial cookies
-            try:
-                session.get('https://finance.yahoo.com/', timeout=10)
-            except Exception as e:
-                logger.warning(f"[Yahoo] Failed to get initial cookies: {str(e)}")
-            
-            YahooFinanceProvider._session = session
-        else:
-            # Always rotate user agents on each API call
-            YahooFinanceProvider._session.headers.update({
-                'User-Agent': random.choice(YahooFinanceProvider._user_agents)
-            })
-        
-        return YahooFinanceProvider._session
-
-    @staticmethod
-    def _wait_for_rate_limit():
-        """Ensures a minimum delay between consecutive API calls."""
-        now = time.time()
-        time_since_last_call = now - YahooFinanceProvider._last_api_call
-        
-        # Check if we've had recent rate limit hits
-        time_since_rate_limit = now - YahooFinanceProvider._rate_limit_last_hit
-        
-        # Determine the wait time based on rate limit history
-        wait_time = YahooFinanceProvider._min_delay_between_calls
-        
-        # If we've had rate limit hits recently, use the more aggressive backoff
-        if YahooFinanceProvider._rate_limit_hits > 0 and time_since_rate_limit < 300:  # Within last 5 minutes
-            wait_time = max(wait_time, YahooFinanceProvider._rate_limit_backoff)
-            logger.info(f"[Yahoo] Using rate limit backoff: {wait_time:.2f} seconds (hits: {YahooFinanceProvider._rate_limit_hits})")
-            
-            # Consider resetting the session if we're using aggressive backoff
-            YahooFinanceProvider._reset_session_if_needed()
-        
-        # If we need to wait, do so
-        if time_since_last_call < wait_time:
-            actual_wait = wait_time - time_since_last_call
-            logger.info(f"[Yahoo] Rate limit: waiting for {actual_wait:.2f} seconds before next call.")
-            time.sleep(actual_wait)
-        
-        # Add some random jitter to avoid synchronized requests
-        jitter = random.uniform(0.5, 2.0)
-        time.sleep(jitter)
-        
-        # Update last call time
-        YahooFinanceProvider._last_api_call = time.time()
-    
-    @staticmethod
-    def _ensure_valid_dates(start_date, end_date):
-        """Ensure dates are valid (in the past) and properly formatted"""
-        # Get current date
-        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-        
-        # Ensure end_date is not in the future
-        if end_date >= current_date:
-            end_date = current_date - timedelta(days=1)  # Yesterday
-        
-        # Ensure start_date is not in the future and before end_date
-        if start_date >= current_date or start_date >= end_date:
-            start_date = end_date - timedelta(days=30)  # 30 days before end_date
-        
-        return start_date, end_date
-
-    @staticmethod
-    def _format_symbol(symbol: str) -> str:
-        """Format symbol for Yahoo Finance API"""
-        symbol = symbol.upper()
-        
-        # Handle commodities
-        commodities_map = {
-            "XAUUSD": "GC=F",   # Gold futures
-            "XAGUSD": "SI=F",   # Silver futures
-            "XTIUSD": "CL=F",   # WTI Crude futures (primary)
-            "WTIUSD": "CL=F",   # WTI Crude futures (alias)
-            "USOIL": "CL=F",    # WTI Crude futures (alias)
-            "XBRUSD": "BZ=F",   # Brent Crude oil futures
-            "XPDUSD": "PA=F",   # Palladium futures
-            "XPTUSD": "PL=F",   # Platinum futures
-            "NATGAS": "NG=F",   # Natural Gas futures
-            "COPPER": "HG=F"    # Copper futures
-        }
-        
-        if symbol in commodities_map:
-            return commodities_map[symbol]
-        
-        # Handle indices
-        indices_map = {
-            "US30": "^DJI",      # Dow Jones
-            "US500": "^GSPC",    # S&P 500
-            "US100": "^NDX",     # Nasdaq 100
-            "UK100": "^FTSE",    # FTSE 100
-            "DE40": "^GDAXI",    # DAX
-            "JP225": "^N225",    # Nikkei 225
-            "AU200": "^AXJO",    # ASX 200
-            "EU50": "^STOXX50E", # Euro Stoxx 50
-            "FR40": "^FCHI",     # CAC 40
-            "HK50": "^HSI"       # Hang Seng
-        }
-        
-        if symbol in indices_map:
-            return indices_map[symbol]
-        
-        # Handle forex pairs (e.g., EURUSD -> EUR=X)
-        if len(symbol) == 6 and all(c.isalpha() for c in symbol):
-            base = symbol[:3]
-            quote = symbol[3:]
-            return f"{base}{quote}=X"
-        
-        return symbol
-
-    @staticmethod
-    def _validate_and_clean_data(df: pd.DataFrame) -> pd.DataFrame:
-        """Perform basic validation and cleaning of market data"""
-        if df is None or df.empty:
-            return df
-        
-        try:
-            # Remove any duplicate indices
-            if df.index.duplicated().sum() > 0:
-                df = df[~df.index.duplicated(keep='last')]
-            
-            # Forward fill a small number of missing values
-            df = df.ffill(limit=2)
-            
-            # Remove rows with remaining NaN values
-            df = df.dropna()
-            
-            # Validate price relationships
-            valid_rows = (
-                (df['High'] >= df['Low']) & 
-                (df['High'] >= df['Open']) & 
-                (df['High'] >= df['Close']) &
-                (df['Low'] <= df['Open']) & 
-                (df['Low'] <= df['Close'])
-            )
-            
-            df = df[valid_rows]
-            
-            # Validate Volume if it exists
-            if 'Volume' in df.columns:
-                df = df[df['Volume'] >= 0]
-            
-            return df
-        
-        except Exception as e:
-            logger.error(f"[Yahoo] Error in data validation: {str(e)}")
-            return df
-    
-    @staticmethod
-    def _try_download_with_ticker(ticker_symbol, start_date, end_date, interval, timeout=30):
-        """Try to download data using the Ticker approach"""
-        logger.info(f"[Yahoo] Trying ticker.history for {ticker_symbol}")
-        
-        try:
-            # Get a session with a fresh user agent
-            session = YahooFinanceProvider._get_session()
-            # Log the user agent we're using for debugging
-            logger.info(f"[Yahoo] Using User-Agent: {session.headers.get('User-Agent', 'Unknown')[:30]}...")
-            
-            ticker = yf.Ticker(ticker_symbol, session=session)
-            
-            df = ticker.history(
-                start=start_date.date(),
-                end=end_date.date(),
-                interval=interval,
-                prepost=False,
-                auto_adjust=True,
-                rounding=True
-            )
-            
-            if df is not None and not df.empty:
-                logger.info(f"[Yahoo] Ticker.history successful for {ticker_symbol}, got {len(df)} rows")
-                # Reset consecutive rate limit count on success
-                if YahooFinanceProvider._rate_limit_hits > 0:
-                    YahooFinanceProvider._rate_limit_hits = max(0, YahooFinanceProvider._rate_limit_hits - 1)
-                return df
-            else:
-                logger.warning(f"[Yahoo] Ticker.history returned empty DataFrame for {ticker_symbol}")
-                return None
-                
-        except Exception as e:
-            error_msg = str(e).lower()
-            logger.error(f"[Yahoo] Ticker.history exception for {ticker_symbol}: {str(e)}")
-            
-            # Check for connectivity issues due to ad blockers or firewalls
-            if YahooFinanceProvider._is_connectivity_error(e):
-                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
-                logger.error(f"[Yahoo] Connection error detected! This may be due to ad-blocking software or firewall. "
-                             f"Try whitelisting these domains: {domains_list}")
-                time.sleep(2)  # Brief pause
-            # Check for rate limit errors
-            elif YahooFinanceProvider._is_rate_limit_error(e):
-                YahooFinanceProvider._handle_rate_limit_error()
-                logger.error(f"[Yahoo] Rate limit detected during ticker.history for {ticker_symbol}")
-                
-                # Add an additional sleep on rate limit error
-                time.sleep(5)
-            
-            return None
-    
-    @staticmethod
-    def _try_download_with_download(ticker_symbol, start_date, end_date, interval, timeout=30):
-        """Try to download data using the yf.download approach"""
-        logger.info(f"[Yahoo] Trying yf.download for {ticker_symbol}")
-        
-        try:
-            # Get a session with a fresh user agent
-            session = YahooFinanceProvider._get_session()
-            # Log the user agent we're using for debugging
-            logger.info(f"[Yahoo] Using User-Agent: {session.headers.get('User-Agent', 'Unknown')[:30]}...")
-            
-            df = yf.download(
-                tickers=ticker_symbol,
-                start=start_date.date(),
-                end=end_date.date(),
-                interval=interval,
-                progress=False,
-                session=session,
-                timeout=timeout,
-                ignore_tz=True,
-                prepost=False,
-                threads=False,
-                rounding=True
-            )
-            
-            if df is not None and not df.empty:
-                logger.info(f"[Yahoo] yf.download successful for {ticker_symbol}, got {len(df)} rows")
-                # Reset consecutive rate limit count on success
-                if YahooFinanceProvider._rate_limit_hits > 0:
-                    YahooFinanceProvider._rate_limit_hits = max(0, YahooFinanceProvider._rate_limit_hits - 1)
-                return df
-            else:
-                logger.warning(f"[Yahoo] yf.download returned empty DataFrame for {ticker_symbol}")
-                return None
-                
-        except Exception as e:
-            error_msg = str(e).lower()
-            logger.error(f"[Yahoo] yf.download exception for {ticker_symbol}: {str(e)}")
-            
-            # Check for connectivity issues due to ad blockers or firewalls
-            if YahooFinanceProvider._is_connectivity_error(e):
-                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
-                logger.error(f"[Yahoo] Connection error detected! This may be due to ad-blocking software or firewall. "
-                             f"Try whitelisting these domains: {domains_list}")
-                time.sleep(2)  # Brief pause
-            # Check for rate limit errors
-            elif YahooFinanceProvider._is_rate_limit_error(e):
-                YahooFinanceProvider._handle_rate_limit_error()
-                logger.error(f"[Yahoo] Rate limit detected during yf.download for {ticker_symbol}")
-                
-                # Add an additional sleep on rate limit error
-                time.sleep(5)
-                
-            return None
-
-    @staticmethod
-    def _download_market_data(symbol, formatted_symbol, timeframe, start_date, end_date, interval):
-        """Download market data with multiple attempts and methods"""
-        # Wait for rate limits
-        YahooFinanceProvider._wait_for_rate_limit()
-        
-        # First attempt: try yf.download
-        df = YahooFinanceProvider._try_download_with_download(
-            formatted_symbol, start_date, end_date, interval, timeout=45
-        )
-        
-        # If download failed, wait and try Ticker approach
-        if df is None or df.empty:
-            # Add delay before second attempt
-            delay = 3
-            if YahooFinanceProvider._rate_limit_hits > 0:
-                # Use longer delay if we've had rate limit issues
-                delay = min(10 * YahooFinanceProvider._rate_limit_hits, 60)
-                logger.info(f"[Yahoo] Using longer delay ({delay}s) before retry due to rate limiting")
-                
-            time.sleep(delay)
-            YahooFinanceProvider._wait_for_rate_limit()
-            
-            df = YahooFinanceProvider._try_download_with_ticker(
-                formatted_symbol, start_date, end_date, interval
-            )
-        
-        # For commodities, we might need to try alternative symbols
-        if (df is None or df.empty) and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
-            # Try alternative symbols for oil
-            alternatives = ["CL=F", "USO", "BNO"]
-            
-            for alt in alternatives:
-                if alt == formatted_symbol:
-                    continue  # Skip if it's the same as what we already tried
-                
-                logger.info(f"[Yahoo] Trying alternative symbol {alt} for {symbol}")
-                
-                # Add delay before attempt with alternative
-                delay = 5
-                if YahooFinanceProvider._rate_limit_hits > 0:
-                    # Use longer delay if we've had rate limit issues
-                    delay = min(15 * YahooFinanceProvider._rate_limit_hits, 120)
-                    logger.info(f"[Yahoo] Using longer delay ({delay}s) before alternative symbol due to rate limiting")
-                    
-                time.sleep(delay)
-                YahooFinanceProvider._wait_for_rate_limit()
-                
-                df = YahooFinanceProvider._try_download_with_download(
-                    alt, start_date, end_date, interval, timeout=30
-                )
-                
-                if df is not None and not df.empty:
-                    logger.info(f"[Yahoo] Successfully got data using alternative symbol {alt}")
-                    break
-            
-            return df
-            
     @classmethod
-    def get_market_data(cls, symbol, timeframe, limit=None, **kwargs):
-        """
-        Get market data for the specified symbol, timeframe and limit
-        """
+    def _initialize(cls):
+        """Initialize de provider met een gecachte en rate-limited session"""
+        if cls._initialized:
+            return
+            
         try:
-            # Wait if needed due to rate limiting
-            YahooFinanceProvider._wait_for_rate_limit()
+            # Maak een cache directory als die nog niet bestaat
+            cache_dir = os.path.join('data', 'cache', 'yahoo')
+            os.makedirs(cache_dir, exist_ok=True)
             
-            # Map the timeframe to the Yahoo interval
-            interval = YahooFinanceProvider._map_timeframe_to_interval(timeframe)
+            # Caching session met een rate limiter
+            # Gebruik een SQLite backend voor betere persistentie
+            backend = 'sqlite'
+            cache_name = os.path.join(cache_dir, 'yfinance_cache')
+            expiry = timedelta(hours=1)
             
-            # Get the Yahoo symbol
-            yahoo_symbol = YahooFinanceProvider._map_symbol_to_yahoo(symbol)
+            # Maak een gecachte session
+            session = requests_cache.CachedSession(
+                cache_name=cache_name,
+                backend=backend,
+                expire_after=expiry
+            )
             
-            # Calculate the start and end dates based on the requested timeframe
-            end_date = datetime.now()
+            # Voeg rate limiting toe (max 2 verzoeken per seconde)
+            limiter_session = LimiterSession(
+                per_second=2,
+                session=session
+            )
             
-            if limit:
-                # Calculate start date based on timeframe and requested limit
-                start_date = YahooFinanceProvider._calculate_start_date(end_date, timeframe, limit)
-            else:
-                # Use a default start date if no limit is provided
-                start_date = end_date - timedelta(days=365)
+            # Configureer retry logica voor verbeterde betrouwbaarheid
+            retries = Retry(
+                total=5,
+                backoff_factor=0.5,
+                status_forcelist=[429, 500, 502, 503, 504],
+                respect_retry_after_header=True
+            )
             
-            # Try to download the data using both methods with increased retry attempts
-            df = None
-            connectivity_error = False
-            rate_limit_error = False
+            adapter = HTTPAdapter(max_retries=retries)
+            limiter_session.mount('http://', adapter)
+            limiter_session.mount('https://', adapter)
             
-            # Try with Ticker.history first (with extra retries)
-            for attempt in range(3):
-                if attempt > 0:
-                    logger.info(f"[Yahoo] Retry attempt {attempt} for {yahoo_symbol} with ticker.history")
-                    time.sleep(5 * attempt)  # Progressive backoff
-                    
-                df = YahooFinanceProvider._try_download_with_ticker(yahoo_symbol, start_date, end_date, interval)
+            # Stel een willekeurige user agent in
+            user_agent = random.choice(cls._user_agents)
+            limiter_session.headers.update({'User-Agent': user_agent})
+            
+            # Sla de session op
+            cls._session = limiter_session
+            cls._initialized = True
+            
+            logger.info(f"[Yahoo] Geïnitialiseerd met gecachte session en rate limiting")
+            logger.info(f"[Yahoo] Cache locatie: {cache_name}")
+            logger.info(f"[Yahoo] Gebruikte User-Agent: {user_agent}")
                 
-                if df is not None and not df.empty:
-                    break
-                
-                # Check if we've been rate limited
-                if YahooFinanceProvider._rate_limit_hits > 3:
-                    logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
-                    time.sleep(30)  # Wait 30 seconds before trying next method
-            
-            # If that failed, try with yf.download (with extra retries)
-            if df is None or df.empty:
-                for attempt in range(3):
-                    if attempt > 0:
-                        logger.info(f"[Yahoo] Retry attempt {attempt} for {yahoo_symbol} with yf.download")
-                        time.sleep(5 * attempt)  # Progressive backoff
-                        
-                    df = YahooFinanceProvider._try_download_with_download(yahoo_symbol, start_date, end_date, interval)
-                    
-                    if df is not None and not df.empty:
-                        break
-                    
-                    # Check if we've been rate limited
-                    if YahooFinanceProvider._rate_limit_hits > 3:
-                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {yahoo_symbol}, will wait longer")
-                        time.sleep(30)  # Wait 30 seconds before trying next method
-            
-            # If still no data, try with alternative symbols for certain instruments
-            if (df is None or df.empty) and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
-                alternatives = ["CL=F", "USO", "BNO", "UCO"]
-                
-                for alt in alternatives:
-                    if alt == yahoo_symbol:
-                        continue  # Skip if it's the same as what we already tried
-                    
-                    logger.info(f"[Yahoo] Trying alternative symbol {alt} for {symbol}")
-                    time.sleep(3)  # Brief pause before trying alternative
-                    
-                    # Try both methods for each alternative
-                    df = YahooFinanceProvider._try_download_with_ticker(alt, start_date, end_date, interval)
-                    
-                    if df is None or df.empty:
-                        df = YahooFinanceProvider._try_download_with_download(alt, start_date, end_date, interval)
-                    
-                    if df is not None and not df.empty:
-                        logger.info(f"[Yahoo] Successfully got data using alternative symbol {alt}")
-                        break
-                    
-                    # Check if we've been rate limited
-                    if YahooFinanceProvider._rate_limit_hits > 3:
-                        logger.warning(f"[Yahoo] Detected repeated rate limiting for {symbol}, will wait longer")
-                        time.sleep(30)  # Wait 30 seconds before trying next alternative
-            
-            # If still no data, return an error
-            if df is None or df.empty:
-                logger.error(f"[Yahoo] Failed to get data for {yahoo_symbol} with timeframe {timeframe}")
-                return None, {"error": "data_not_available", "message": f"Could not retrieve data for {symbol}"}
-            
-            # Process the data for our needs
-            processed_df = YahooFinanceProvider._process_dataframe(df, yahoo_symbol)
-            
-            # Ensure the limit is applied
-            if limit and len(processed_df) > limit:
-                processed_df = processed_df.tail(limit)
-            
-            # Extract indicators at the same time
-            indicators = None
-            if not processed_df.empty:
-                indicators = YahooFinanceProvider._extract_indicators_from_dataframe(processed_df)
-            
-            return processed_df, indicators
-            
         except Exception as e:
-            # Handle connectivity errors specifically
-            if YahooFinanceProvider._is_connectivity_error(e):
-                domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
-                error_message = (
-                    f"[Yahoo] Connection error detected when trying to fetch data for {symbol}. "
-                    f"This is often caused by ad-blocking software or firewalls blocking Yahoo Finance domains. "
-                    f"Please try whitelisting these domains in your ad blocker, hosts file, or firewall: "
-                    f"{domains_list}"
-                )
-                logger.error(error_message)
-                
-                # Return an error instead of fallback data
-                return pd.DataFrame(), {"error": "connectivity", "message": error_message}
+            logger.error(f"[Yahoo] Fout bij initialisatie: {str(e)}")
+            # Zorg dat we een basis session hebben, zelfs als caching faalt
+            cls._session = requests.Session()
+            cls._session.headers.update({'User-Agent': random.choice(cls._user_agents)})
+    
+    @classmethod
+    def get_market_data(cls, symbol: str, timeframe: str = "1h", limit: int = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Haal marktdata op voor het opgegeven symbool en timeframe
+        
+        Args:
+            symbol: Het handelssymbool (bijv. EURUSD, AAPL)
+            timeframe: Het tijdsinterval (1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo)
+            limit: Maximaal aantal datapunten
             
-            # Handle rate limiting specifically
-            elif YahooFinanceProvider._is_rate_limit_error(e):
-                YahooFinanceProvider._handle_rate_limit_error()
-                logger.error(f"[Yahoo] Rate limit detected during data fetch for {symbol}")
-                
-                # Return an error instead of fallback data
-                return pd.DataFrame(), {"error": "rate_limit", "message": f"Rate limit exceeded for {symbol}"}
-            
-            else:
-                logger.exception(f"[Yahoo] Error fetching market data for {symbol} with timeframe {timeframe}: {str(e)}")
-                
-                # Return an error instead of fallback data
-                return pd.DataFrame(), {"error": "unknown", "message": str(e)}
-
-    @staticmethod
-    def get_stock_info(symbol: str) -> Optional[Dict[str, Any]]:
-        """Get detailed information about a stock"""
+        Returns:
+            Tuple[pd.DataFrame, Dict]: (Dataframe met marktdata, info dictionary)
+        """
         try:
-            formatted_symbol = YahooFinanceProvider._format_symbol(symbol)
+            # Zorg dat de provider is geïnitialiseerd
+            if not cls._initialized:
+                cls._initialize()
+                
+            # Converteer timeframe naar Yahoo format
+            interval = cls._map_timeframe_to_interval(timeframe)
             
-            # Wait for rate limit
-            YahooFinanceProvider._wait_for_rate_limit()
+            # Converteer symbool naar Yahoo format
+            yahoo_symbol = cls._map_symbol_to_yahoo(symbol)
+            
+            # Bereken periode op basis van limit en timeframe
+            period = cls._calculate_period(timeframe, limit)
+            
+            logger.info(f"[Yahoo] Ophalen data voor {yahoo_symbol} met interval {interval} en periode {period}")
             
             try:
-                ticker = yf.Ticker(formatted_symbol)
-                info = ticker.info
-                return info
+                # Gebruik yfinance met onze geconfigureerde session
+                ticker = yf.Ticker(yahoo_symbol, session=cls._session)
+                
+                # Download historische data
+                df = ticker.history(period=period, interval=interval, auto_adjust=True)
+                
+                # Als we geen data krijgen, probeer een alternatief symbool voor commodities
+                if df.empty and symbol in ["USOIL", "XTIUSD", "WTIUSD"]:
+                    alternative_symbols = ["CL=F", "USO", "BNO"]
+                    
+                    for alt_symbol in alternative_symbols:
+                        if alt_symbol == yahoo_symbol:
+                            continue
+                            
+                        logger.info(f"[Yahoo] Probeer alternatief symbool {alt_symbol} voor {symbol}")
+                        
+                        ticker = yf.Ticker(alt_symbol, session=cls._session)
+                        df = ticker.history(period=period, interval=interval, auto_adjust=True)
+                        
+                        if not df.empty:
+                            logger.info(f"[Yahoo] Succesvol data opgehaald met alternatief symbool {alt_symbol}")
+                            break
+                
+                # Als we nog steeds geen data hebben, return een error
+                if df.empty:
+                    logger.warning(f"[Yahoo] Geen data gevonden voor {yahoo_symbol}")
+                    return pd.DataFrame(), {"error": "data_not_available", "message": f"Geen data beschikbaar voor {symbol}"}
+                
+                # Verwerk dataframe voor consistente format
+                df = cls._process_dataframe(df)
+                
+                # Bereken technische indicatoren
+                indicators = cls._calculate_indicators(df)
+                
+                # Pas limit toe indien nodig
+                if limit and len(df) > limit:
+                    df = df.tail(limit)
+                
+                logger.info(f"[Yahoo] Succesvol {len(df)} rijen opgehaald voor {yahoo_symbol}")
+                return df, indicators
+                
             except Exception as e:
-                logger.error(f"[Yahoo] Error getting stock info: {str(e)}")
+                error_msg = str(e).lower()
                 
-                # Check for connectivity issues
-                if YahooFinanceProvider._is_connectivity_error(e):
-                    domains_list = ", ".join(YahooFinanceProvider._yahoo_domains)
-                    logger.error(f"[Yahoo] Connection error detected when getting stock info. "
-                                 f"This may be due to ad-blocking software or firewall. "
-                                 f"Try whitelisting these domains: {domains_list}")
-                # Check for rate limit errors
-                elif YahooFinanceProvider._is_rate_limit_error(e):
-                    YahooFinanceProvider._handle_rate_limit_error()
-                    logger.error(f"[Yahoo] Rate limit detected during get_stock_info for {symbol}")
+                # Rate limit error afhandeling
+                if "rate limit" in error_msg or "too many requests" in error_msg or "429" in error_msg:
+                    logger.error(f"[Yahoo] Rate limit bereikt voor {yahoo_symbol}: {str(e)}")
+                    
+                    # Wacht lang genoeg voor de volgende poging
+                    wait_time = random.uniform(20, 30)  # Langere wachttijd bij rate limits
+                    logger.info(f"[Yahoo] Wachten {wait_time:.2f} seconden vanwege rate limiting")
+                    time.sleep(wait_time)
+                    
+                    # Roteer de User-Agent
+                    if cls._session:
+                        new_user_agent = random.choice(cls._user_agents)
+                        cls._session.headers.update({'User-Agent': new_user_agent})
+                        logger.info(f"[Yahoo] User-Agent gewijzigd naar: {new_user_agent[:30]}...")
+                    
+                    return pd.DataFrame(), {"error": "rate_limit", "message": f"Rate limit overschreden voor {symbol}. Probeer later opnieuw."}
                 
-                raise
+                # Andere fouten
+                logger.error(f"[Yahoo] Fout bij ophalen data voor {yahoo_symbol}: {str(e)}")
+                return pd.DataFrame(), {"error": "unknown", "message": f"Fout bij ophalen data voor {symbol}: {str(e)}"}
             
         except Exception as e:
-            logger.error(f"[Yahoo] Error getting stock info: {str(e)}")
-            return None
-
+            logger.error(f"[Yahoo] Onverwachte fout: {str(e)}")
+            logger.error(traceback.format_exc())
+                return pd.DataFrame(), {"error": "unknown", "message": str(e)}
+    
     @staticmethod
-    def _handle_rate_limit_error():
-        """Update rate limit tracking when a 429 error is detected"""
-        now = time.time()
-        YahooFinanceProvider._rate_limit_last_hit = now
-        YahooFinanceProvider._rate_limit_hits += 1
-        
-        # Exponentially increase backoff time based on consecutive hits
-        # Cap at 5 minutes (300 seconds)
-        YahooFinanceProvider._rate_limit_backoff = min(
-            YahooFinanceProvider._rate_limit_backoff * 2,
-            300
-        )
-        
-        # Also increase the minimum delay between calls
-        YahooFinanceProvider._min_delay_between_calls = min(
-            YahooFinanceProvider._min_delay_between_calls + 1,
-            10
-        )
-        
-        logger.warning(f"[Yahoo] Rate limit hit detected. Consecutive hits: {YahooFinanceProvider._rate_limit_hits}")
-        logger.warning(f"[Yahoo] New backoff time: {YahooFinanceProvider._rate_limit_backoff} seconds")
-        
-        # Reset session if we've hit too many rate limits
-        YahooFinanceProvider._reset_session_if_needed()
-
-    @staticmethod
-    def _reset_session_if_needed():
-        """Reset the session if we've hit too many rate limits"""
-        if YahooFinanceProvider._rate_limit_hits >= 5:
-            logger.warning("[Yahoo] Too many rate limit hits, resetting session")
-            YahooFinanceProvider._session = None
-            # Create a new session
-            _ = YahooFinanceProvider._get_session()
-            # Reset the rate limit counter partially
-            YahooFinanceProvider._rate_limit_hits = max(1, YahooFinanceProvider._rate_limit_hits // 2)
-            return True
-        return False
-
-    @staticmethod
-    def _is_rate_limit_error(exception):
-        """Check if an exception is a rate limit error based on its message"""
-        error_msg = str(exception).lower()
-        rate_limit_phrases = [
-            "rate limit", 
-            "too many requests", 
-            "429", 
-            "rate limited", 
-            "try after a while"
-        ]
-        return any(phrase in error_msg for phrase in rate_limit_phrases)
-
-    @staticmethod
-    def _is_connectivity_error(exception):
-        """Check if the exception is related to connectivity issues with Yahoo domains"""
-        error_msg = str(exception).lower()
-        
-        # Check for common connection errors that might be due to ad blockers/firewalls
-        connection_error_phrases = [
-            "newconnectionerror",
-            "failed to establish a new connection",
-            "connectionerror",
-            "proxyerror",
-            "connection refused",
-            "winerror 10049",
-            "max retries exceeded",
-            "unable to connect"
-        ]
-        
-        # Check for Yahoo domains that might be blocked
-        domains_mentioned = any(domain.lower() in error_msg for domain in YahooFinanceProvider._yahoo_domains)
-        
-        # Return True if both a connection error and Yahoo domain are mentioned
-        return any(phrase in error_msg for phrase in connection_error_phrases) and domains_mentioned
-
-    @staticmethod
-    def _map_timeframe_to_interval(timeframe):
-        """Map the trading bot timeframe to Yahoo Finance interval"""
-        timeframe_mapping = {
+    def _map_timeframe_to_interval(timeframe: str) -> str:
+        """Converteer timeframe naar Yahoo Finance interval"""
+        mapping = {
             "1m": "1m",
             "5m": "5m",
             "15m": "15m",
             "30m": "30m",
             "1h": "1h",
-            "4h": "1h",  # We'll resample 1h data to 4h
+            "4h": "1h",  # 4h moet worden geresampled vanuit 1h
             "1d": "1d",
             "1wk": "1wk",
             "1mo": "1mo"
         }
-        return timeframe_mapping.get(timeframe, "1d")  # Default to daily if unknown
+        return mapping.get(timeframe, "1d")  # Default naar daily
 
     @staticmethod
-    def _map_symbol_to_yahoo(symbol):
-        """Map a trading bot symbol to a Yahoo Finance symbol"""
-        # Handle common mappings
+    def _map_symbol_to_yahoo(symbol: str) -> str:
+        """Converteer trading bot symbool naar Yahoo Finance formaat"""
+        # Standaard mappings voor bekende symbolen
         symbol_mapping = {
-            "XAUUSD": "GC=F",  # Gold futures
-            "XAGUSD": "SI=F",  # Silver futures
-            "USOIL": "CL=F",   # Crude oil futures
-            "US30": "^DJI",    # Dow Jones Industrial Average
-            "SPX500": "^GSPC", # S&P 500
-            "NAS100": "^NDX",  # NASDAQ 100
-            "VIX": "^VIX",     # Volatility Index
-            "US500": "^GSPC",  # S&P 500 (alternative name)
-            "DE30": "^GDAXI",  # DAX
-            "UK100": "^FTSE",  # FTSE 100
-            "JP225": "^N225",  # Nikkei 225
+            "XAUUSD": "GC=F",   # Gold futures
+            "XAGUSD": "SI=F",    # Silver futures
+            "XTIUSD": "CL=F",    # WTI Crude oil futures
+            "WTIUSD": "CL=F",    # WTI crude oil (alias)
+            "USOIL": "CL=F",     # US Oil (zelfde als WTI)
+            "XBRUSD": "BZ=F",    # Brent crude oil
+            "US30": "^DJI",      # Dow Jones
+            "US500": "^GSPC",    # S&P 500
+            "SPX500": "^GSPC",   # S&P 500 (alternatieve naam)
+            "US100": "^NDX",     # Nasdaq 100
+            "NAS100": "^NDX",    # Nasdaq 100 (alternatieve naam)
+            "UK100": "^FTSE",    # FTSE 100
+            "DE40": "^GDAXI",    # DAX
+            "JP225": "^N225",    # Nikkei 225
+            "VIX": "^VIX",       # Volatility Index
         }
         
-        # Check direct mapping first
+        # Controleer op directe mapping
         if symbol in symbol_mapping:
             return symbol_mapping[symbol]
         
-        # Handle forex pairs (e.g., EURUSD -> EURUSD=X)
-        if re.match(r'^[A-Z]{6}$', symbol):
-            return f"{symbol[:3]}{symbol[3:]}=X"
+        # Forex paren (bijv. EURUSD -> EURUSD=X)
+        if len(symbol) == 6 and symbol.isalpha():
+            base = symbol[:3]
+            quote = symbol[3:]
+            return f"{base}{quote}=X"
         
-        # Handle indices that may need a caret
-        if symbol.startswith("US") or symbol.startswith("EU") or symbol.startswith("UK"):
-            if not symbol.startswith("^"):
-                return f"^{symbol}"
-        
-        # Default case: return as is
+        # Aandelen kunnen direct worden doorgegeven
         return symbol
 
     @staticmethod
-    def _calculate_start_date(end_date, timeframe, limit):
-        """Calculate the start date based on the timeframe and limit"""
+    def _calculate_period(timeframe: str, limit: int = None) -> str:
+        """Bereken de juiste periode voor Yahoo Finance op basis van timeframe en limit"""
+        if not limit:
+            # Standaard periodes indien geen limit is opgegeven
+            default_periods = {
+                "1m": "7d",    # Yahoo heeft max 7 dagen voor 1m data
+                "5m": "60d",   # Max 60 dagen voor 5m data
+                "15m": "60d",  # Max 60 dagen voor 15m data
+                "30m": "60d",  # Max 60 dagen voor 30m data
+                "1h": "730d",  # 2 jaar voor 1h data
+                "4h": "730d",  # 2 jaar voor 4h data (geresampled)
+                "1d": "5y",    # 5 jaar voor dagelijkse data
+                "1wk": "10y",  # 10 jaar voor wekelijkse data
+                "1mo": "30y"   # 30 jaar voor maandelijkse data
+            }
+            return default_periods.get(timeframe, "1y")
+        
+        # Bereken de periode op basis van limit
         if timeframe == "1m":
-            # Yahoo only provides 7 days of 1m data
-            days = min(7, limit / 24 / 60)
-            return end_date - timedelta(days=days + 1)
+            days = min(7, limit / 24 / 60)  # Max 7 dagen voor 1m data
+            return f"{int(days) + 1}d" if days < 7 else "7d"
         elif timeframe == "5m":
-            # Yahoo provides 60 days of 5m data
             days = min(60, limit * 5 / 24 / 60)
-            return end_date - timedelta(days=days + 1)
+            return f"{int(days) + 1}d" if days < 60 else "60d"
         elif timeframe == "15m":
-            # Yahoo provides 60 days of 15m data
             days = min(60, limit * 15 / 24 / 60)
-            return end_date - timedelta(days=days + 1)
+            return f"{int(days) + 1}d" if days < 60 else "60d"
         elif timeframe == "30m":
-            # Yahoo provides 60 days of 30m data
             days = min(60, limit * 30 / 24 / 60)
-            return end_date - timedelta(days=days + 1)
+            return f"{int(days) + 1}d" if days < 60 else "60d"
         elif timeframe == "1h":
-            # Yahoo provides 730 days of 1h data
             days = min(730, limit / 24)
-            return end_date - timedelta(days=days + 5)  # Add some buffer
+            if days <= 60:
+                return f"{int(days) + 1}d"
+            elif days <= 730:
+                return f"{int(days / 30) + 1}mo"
+            else:
+                return "2y"
         elif timeframe == "4h":
-            # For 4h data (which is resampled from 1h), we need 4x the hours
             days = min(730, limit * 4 / 24)
-            return end_date - timedelta(days=days + 5)
+            if days <= 60:
+                return f"{int(days) + 1}d"
+            elif days <= 730:
+                return f"{int(days / 30) + 1}mo"
+            else:
+                return "2y"
         elif timeframe == "1d":
-            # For daily data, just add days plus some buffer for indicators
-            days = limit + 50  # Extra days for calculating indicators
-            return end_date - timedelta(days=days)
+            if limit <= 60:
+                return f"{limit + 5}d"  # Paar extra dagen voor indicatoren
+            elif limit <= 365:
+                return f"{int(limit / 30) + 2}mo"
+            else:
+                years = limit / 365
+                return f"{int(years) + 1}y"
         elif timeframe == "1wk":
-            # For weekly data
             weeks = limit
-            return end_date - timedelta(weeks=weeks + 10)
+            if weeks <= 52:
+                return f"{weeks + 2}wk"
+            else:
+                years = weeks / 52
+                return f"{int(years) + 1}y"
         elif timeframe == "1mo":
-            # For monthly data
-            days = limit * 30 + 60  # Approximate
-            return end_date - timedelta(days=days)
+            months = limit
+            if months <= 12:
+                return f"{months + 1}mo"
         else:
-            # Default fallback - 1 year
-            return end_date - timedelta(days=365)
+                years = months / 12
+                return f"{int(years) + 1}y"
+        
+        # Default
+        return "1y"
 
     @staticmethod
-    def _process_dataframe(df, symbol):
-        """Process the dataframe to ensure it's in the correct format"""
-        if df is None or df.empty:
-            return pd.DataFrame()
+    def _process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        """Verwerk het dataframe voor consistente format"""
+        if df.empty:
+            return df
         
-        try:
-            # Handle potential MultiIndex columns
+        # Zorg dat de kolommen de juiste namen hebben
             if isinstance(df.columns, pd.MultiIndex):
-                logger.info(f"[Yahoo] Processing MultiIndex DataFrame for {symbol}")
-                
-                # Get column level names
-                level_names = df.columns.names
-                logger.debug(f"[Yahoo] MultiIndex levels: {level_names}")
-                
-                # For data from yf.download with a single ticker, the structure is typically:
-                # first level: Open, High, Low, Close, etc.
-                # second level: ticker name
-                
-                # Create a new DataFrame with standard column names
-                if len(df.columns.levels) >= 2:
-                    # Get all unique column types from first level
-                    col_types = df.columns.levels[0].tolist()
-                    
-                    # Create new flat DataFrame
-                    new_df = pd.DataFrame(index=df.index)
-                    
-                    for col_type in col_types:
-                        # Get the values for this column type (e.g., all 'Open' values)
-                        if (col_type, symbol) in df.columns:
-                            new_df[col_type] = df[(col_type, symbol)]
-                        # Try using the first ticker if symbol specific column not found
-                        elif len(df.columns.levels[1]) > 0:
-                            ticker = df.columns.levels[1][0]
-                            if (col_type, ticker) in df.columns:
-                                new_df[col_type] = df[(col_type, ticker)]
-                    
-                    # Use the new DataFrame
-                    df = new_df
-                    logger.info(f"[Yahoo] Successfully flattened MultiIndex DataFrame to {list(df.columns)}")
-            
-            # Ensure standard column names
-            standard_columns = {'Open', 'High', 'Low', 'Close', 'Volume'}
-            actual_columns = set(df.columns)
-            
-            # Check if we need to rename columns (case insensitive)
-            rename_map = {}
-            for std_col in standard_columns:
-                for actual_col in actual_columns:
-                    if std_col.lower() == actual_col.lower() and std_col != actual_col:
-                        rename_map[actual_col] = std_col
-            
-            # Apply renaming if needed
+            # yfinance geeft soms een MultiIndex terug
+            df = df.droplevel(level=0, axis=1)
+        
+        # Converteer kolommen naar correcte format
+        columns = []
+        rename_map = {}
+        
+        for col in df.columns:
+            lower_col = col.lower()
+            if lower_col in ['open', 'high', 'low', 'close', 'volume']:
+                rename_map[col] = lower_col.capitalize()
+                columns.append(lower_col.capitalize())
+        
+        # Hernoem kolommen indien nodig
             if rename_map:
                 df = df.rename(columns=rename_map)
-                logger.info(f"[Yahoo] Renamed columns: {rename_map}")
-            
-            # Handle 4h timeframe resampling if needed
-            if getattr(df, '_timeframe', None) == '4h' or getattr(df, 'interval', None) == '4h':
-                logger.info(f"[Yahoo] Resampling 1h data to 4h for {symbol}")
-                try:
-                    # Create a dict of column mappings for aggregation
+        
+        # Voeg missende kolommen toe met NaN waarden
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if col not in df.columns:
+                df[col] = np.nan
+        
+        # Resample 1h naar 4h indien nodig
+        if getattr(df, '_timeframe', None) == '4h':
+            try:
+                # Aggregatie regels
                     agg_dict = {
                         'Open': 'first',
                         'High': 'max',
                         'Low': 'min',
-                        'Close': 'last'
+                    'Close': 'last',
+                    'Volume': 'sum'
                     }
-                    if 'Volume' in df.columns:
-                        agg_dict['Volume'] = 'sum'
                         
-                    # Resample to 4h
+                # Resample
                     df = df.resample('4h').agg(agg_dict)
-                    df.dropna(inplace=True)
-                    logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df.shape}")
                 except Exception as e:
-                    logger.error(f"[Yahoo] Error resampling to 4h: {str(e)}")
-                    # Continue with 1h data if resampling fails
-            
-            # Ensure the DataFrame has a proper datetime index
-            if not isinstance(df.index, pd.DatetimeIndex):
-                try:
-                    df.index = pd.to_datetime(df.index)
-                    logger.info(f"[Yahoo] Converted index to DatetimeIndex")
-                except Exception as e:
-                    logger.error(f"[Yahoo] Error converting index to datetime: {str(e)}")
-            
-            # Sort the DataFrame by date (ascending)
+                logger.error(f"[Yahoo] Fout bij resampling naar 4h: {str(e)}")
+        
+        # Verwerk missende waarden
+        df = df.ffill(limit=2)  # Forward fill met limiet
+        df = df.dropna()  # Verwijder resterende NaN waarden
+        
+        # Sorteer op index
             df = df.sort_index()
             
-            # Drop any NaN rows
-            df = df.dropna()
-            
             return df
-        except Exception as e:
-            logger.error(f"[Yahoo] Error processing DataFrame: {str(e)}")
-            logger.error(traceback.format_exc())
-            return pd.DataFrame()
 
     @staticmethod
-    def _extract_indicators_from_dataframe(df):
-        """Extract indicators from the DataFrame's last row"""
-        if df is None or df.empty:
-            return None
+    def _calculate_indicators(df: pd.DataFrame) -> Dict[str, Any]:
+        """Bereken technische indicatoren op basis van prijsdata"""
+        if df.empty:
+            return {"error": "no_data"}
         
         try:
-            # Create indicators dictionary with basic OHLCV data
+            # Haal de laatste prijs op
+            latest = df.iloc[-1]
+            
+            # Basis indicatoren
             indicators = {
-                'open': float(df['Open'].iloc[-1]),
-                'high': float(df['High'].iloc[-1]),
-                'low': float(df['Low'].iloc[-1]),
-                'close': float(df['Close'].iloc[-1]),
-                'volume': float(df['Volume'].iloc[-1]) if 'Volume' in df.columns else 0
+                "close": float(latest["Close"]),
+                "open": float(latest["Open"]),
+                "high": float(latest["High"]),
+                "low": float(latest["Low"]),
+                "volume": float(latest["Volume"]) if "Volume" in df else 0,
             }
             
-            # Add EMAs if we have enough data
+            # EMA berekeningen
             if len(df) >= 20:
                 df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
-                indicators['EMA20'] = float(df['EMA20'].iloc[-1])
+                indicators["ema_20"] = float(df['EMA20'].iloc[-1])
             
             if len(df) >= 50:
                 df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-                indicators['EMA50'] = float(df['EMA50'].iloc[-1])
+                indicators["ema_50"] = float(df['EMA50'].iloc[-1])
                 
             if len(df) >= 200:
                 df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
-                indicators['EMA200'] = float(df['EMA200'].iloc[-1])
+                indicators["ema_200"] = float(df['EMA200'].iloc[-1])
             
-            # Calculate RSI
+            # RSI berekening
             if len(df) >= 14:
                 delta = df['Close'].diff()
                 gain = delta.where(delta > 0, 0)
@@ -907,136 +455,40 @@ class YahooFinanceProvider:
                 avg_loss = loss.rolling(window=14).mean()
                 rs = avg_gain / avg_loss
                 df['RSI'] = 100 - (100 / (1 + rs))
-                indicators['RSI'] = float(df['RSI'].iloc[-1])
+                indicators["rsi"] = float(df['RSI'].iloc[-1])
             
-            # Calculate MACD
+            # MACD berekening
             if len(df) >= 26:
                 df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
                 df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
                 df['MACD'] = df['EMA12'] - df['EMA26']
                 df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-                indicators['MACD'] = float(df['MACD'].iloc[-1])
-                indicators['MACD_signal'] = float(df['MACD_signal'].iloc[-1])
-                indicators['MACD_hist'] = indicators['MACD'] - indicators['MACD_signal']
+                indicators["macd"] = float(df['MACD'].iloc[-1])
+                indicators["macd_signal"] = float(df['MACD_signal'].iloc[-1])
+                indicators["macd_hist"] = indicators["macd"] - indicators["macd_signal"]
+            
+            # Bollinger Bands
+            if len(df) >= 20:
+                df['SMA20'] = df['Close'].rolling(window=20).mean()
+                df['SD20'] = df['Close'].rolling(window=20).std()
+                df['upper_band'] = df['SMA20'] + (df['SD20'] * 2)
+                df['lower_band'] = df['SMA20'] - (df['SD20'] * 2)
+                indicators["bb_upper"] = float(df['upper_band'].iloc[-1])
+                indicators["bb_middle"] = float(df['SMA20'].iloc[-1])
+                indicators["bb_lower"] = float(df['lower_band'].iloc[-1])
+            
+            # Dagelijkse en wekelijkse range
+            indicators["daily_high"] = float(df['High'].iloc[-1])
+            indicators["daily_low"] = float(df['Low'].iloc[-1])
+            
+            # Calculate weekly range if we have enough data
+            if len(df) >= 5:
+                weekly_data = df.tail(5)  # Laatste 5 datapunten voor dagelijkse data
+                indicators["weekly_high"] = float(weekly_data['High'].max())
+                indicators["weekly_low"] = float(weekly_data['Low'].min())
             
             return indicators
             
         except Exception as e:
-            logger.error(f"[Yahoo] Error extracting indicators: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None
-
-    @staticmethod
-    def _generate_fallback_data(symbol, timeframe, limit=100):
-        """Generate fallback data when Yahoo Finance API is unavailable due to rate limiting"""
-        logger.warning(f"[Yahoo] Generating fallback data for {symbol} with timeframe {timeframe}")
-        
-        # Get current time
-        end_time = datetime.now()
-        
-        # Map timeframe to timedelta
-        if timeframe == '1m':
-            delta = timedelta(minutes=1)
-        elif timeframe == '5m':
-            delta = timedelta(minutes=5)
-        elif timeframe == '15m':
-            delta = timedelta(minutes=15)
-        elif timeframe == '30m':
-            delta = timedelta(minutes=30)
-        elif timeframe == '1h':
-            delta = timedelta(hours=1)
-        elif timeframe == '4h':
-            delta = timedelta(hours=4)
-        elif timeframe == '1d':
-            delta = timedelta(days=1)
-        elif timeframe == '1wk':
-            delta = timedelta(weeks=1)
-        else:  # Default to 1d
-            delta = timedelta(days=1)
-        
-        # Create a date range for the requested period
-        dates = [end_time - (i * delta) for i in range(limit)]
-        dates.reverse()  # Oldest first
-        
-        # Determine base price based on symbol
-        base_price = 80.0  # Default value for USOIL/CL=F
-        
-        if symbol in ["GC=F", "XAUUSD"]:  # Gold
-            base_price = 1900.0
-        elif symbol in ["SI=F", "XAGUSD"]:  # Silver
-            base_price = 25.0
-        elif symbol in ["CL=F", "USOIL", "XTIUSD", "WTIUSD"]:  # Oil
-            base_price = 75.0
-        elif symbol in ["^DJI", "US30"]:  # Dow Jones
-            base_price = 39000.0
-        elif symbol in ["^GSPC", "US500", "SPX500"]:  # S&P 500
-            base_price = 5200.0
-        elif symbol in ["^NDX", "US100", "NAS100"]:  # Nasdaq 100
-            base_price = 18200.0
-        elif symbol == "EURUSD=X" or symbol == "EURUSD":
-            base_price = 1.08
-        elif symbol == "GBPUSD=X" or symbol == "GBPUSD":
-            base_price = 1.25
-        elif symbol == "USDJPY=X" or symbol == "USDJPY":
-            base_price = 155.0
-        
-        # Generate price data with some random walk
-        close_prices = []
-        current_price = base_price
-        
-        for _ in range(limit):
-            # Add small random change
-            change = current_price * np.random.normal(0, 0.005)  # 0.5% standard deviation
-            current_price += change
-            close_prices.append(current_price)
-        
-        # Create dataframe with proper index
-        df = pd.DataFrame(index=dates)
-        df.index.name = 'Date'
-        
-        # Create OHLC based on the close prices
-        df['Close'] = close_prices
-        df['Open'] = df['Close'].shift(1)
-        # For the first row, open = close
-        df.loc[df.index[0], 'Open'] = df.loc[df.index[0], 'Close']
-        
-        # High is slightly above the max of open/close
-        df['High'] = df[['Open', 'Close']].max(axis=1) * (1 + abs(np.random.normal(0, 0.002, size=len(df))))
-        
-        # Low is slightly below the min of open/close
-        df['Low'] = df[['Open', 'Close']].min(axis=1) * (1 - abs(np.random.normal(0, 0.002, size=len(df))))
-        
-        # Add some volume
-        df['Volume'] = np.random.randint(1000, 10000, size=len(df))
-        
-        # Fill any NA values
-        df = df.fillna(method='ffill')
-        
-        # Add some technical indicators that might be used
-        if len(df) >= 20:
-            df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
-            
-        if len(df) >= 50:
-            df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-            
-        if len(df) >= 200:
-            df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
-        
-        # Calculate RSI
-        if len(df) >= 14:
-            delta = df['Close'].diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(window=14).mean()
-            avg_loss = loss.rolling(window=14).mean()
-            rs = avg_gain / avg_loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # Calculate MACD
-        if len(df) >= 26:
-            df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
-            df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
-            df['MACD'] = df['EMA12'] - df['EMA26']
-            df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        
-        return df
+            logger.error(f"[Yahoo] Fout bij berekenen indicatoren: {str(e)}")
+            return {"error": "indicator_calculation_failed", "message": str(e)}
