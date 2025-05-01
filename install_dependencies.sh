@@ -13,6 +13,10 @@ fi
 echo "Installing yfinance explicitly..."
 pip install yfinance==0.2.57
 
+# Installeer cachetools expliciet (nodig voor YahooFinanceProvider)
+echo "Installing cachetools explicitly..."
+pip install cachetools>=5.5.0
+
 # Installeer overige dependencies
 echo "Installing other dependencies..."
 pip install -r requirements.txt
