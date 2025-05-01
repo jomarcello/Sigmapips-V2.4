@@ -694,7 +694,20 @@ class ChartService:
                             
                             return analysis
                         elif isinstance(info, dict) and 'error' in info:
-                            logger.warning(f"Yahoo provider error for {instrument}: {info['message']}")
+                            logger.error(f"Yahoo provider error for {instrument}: {info['message']}")
+                            # Return error message to user for rate limit errors
+                            if info.get('error') == 'rate_limit':
+                                error_msg = f"Yahoo Finance rate limit exceeded for {instrument}. Please try again later."
+                                logger.error(error_msg)
+                                return f"⚠️ <b>Data Error:</b> {error_msg}\n\nPlease wait a few minutes before trying again."
+                            elif info.get('error') == 'connectivity':
+                                error_msg = f"Connection to Yahoo Finance failed for {instrument}. This may be due to network issues."
+                                logger.error(error_msg)
+                                return f"⚠️ <b>Connection Error:</b> {error_msg}\n\nPlease check your internet connection and try again."
+                            elif info.get('error') == 'data_not_available':
+                                error_msg = f"Data not available for {instrument} from Yahoo Finance."
+                                logger.error(error_msg)
+                                return f"⚠️ <b>Data Error:</b> {error_msg}\n\nThe requested market data is not available at this time."
                         else:
                             logger.warning(f"Yahoo provider returned no data for {instrument}")
                     elif isinstance(provider, BinanceProvider):
@@ -787,23 +800,31 @@ class ChartService:
                                 
                                 return analysis
                             elif isinstance(info, dict) and 'error' in info:
-                                logger.warning(f"Yahoo provider error for {yahoo_symbol}: {info['message']}")
+                                logger.error(f"Yahoo provider error for {yahoo_symbol}: {info['message']}")
+                                # Return error message to user for rate limit errors
+                                if info.get('error') == 'rate_limit':
+                                    error_msg = f"Yahoo Finance rate limit exceeded for {instrument}. Please try again later."
+                                    logger.error(error_msg)
+                                    return f"⚠️ <b>Data Error:</b> {error_msg}\n\nPlease wait a few minutes before trying again."
+                                elif info.get('error') == 'connectivity':
+                                    error_msg = f"Connection to Yahoo Finance failed for {instrument}. This may be due to network issues."
+                                    logger.error(error_msg)
+                                    return f"⚠️ <b>Connection Error:</b> {error_msg}\n\nPlease check your internet connection and try again."
+                                elif info.get('error') == 'data_not_available':
+                                    error_msg = f"Data not available for {instrument} from Yahoo Finance."
+                                    logger.error(error_msg)
+                                    return f"⚠️ <b>Data Error:</b> {error_msg}\n\nThe requested market data is not available at this time."
                             else:
                                 logger.warning(f"Yahoo provider returned no data for {yahoo_symbol}")
                 except Exception as e:
-                    logger.error(f"Error fetching commodity price from Yahoo Finance: {str(e)}")
+                    error_msg = f"Error fetching commodity price from Yahoo Finance: {str(e)}"
+                    logger.error(error_msg)
+                    return f"⚠️ <b>Error:</b> {error_msg}\n\nUnable to retrieve market data at this time."
                 
-                # Fallback to default analysis if Yahoo Finance failed
-                logger.warning(f"Could not get commodity price for {instrument}, using default analysis")
-                analysis = await self._generate_default_analysis(instrument, timeframe)
+                error_msg = f"Failed to get data for {instrument} from Yahoo Finance."
+                logger.warning(error_msg)
+                return f"⚠️ <b>Data Error:</b> {error_msg}\n\nUnable to retrieve market data at this time."
                 
-                # Cache the analysis
-                self.analysis_cache[cache_key] = {
-                    'analysis': analysis,
-                    'timestamp': current_time
-                }
-                
-                return analysis
             elif market_type == 'index':
                 logger.warning(f"All providers failed for index {instrument}, using index-specific methods")
                 
@@ -822,17 +843,10 @@ class ChartService:
                 
                 return analysis
             
-            # If we got here, all methods failed - generate a default analysis
-            logger.warning(f"All analysis methods failed for {instrument}, using default template")
-            analysis = await self._generate_default_analysis(instrument, timeframe)
-            
-            # Cache the analysis even though it's a fallback
-            self.analysis_cache[cache_key] = {
-                'analysis': analysis,
-                'timestamp': current_time
-            }
-            
-            return analysis
+            # If we got here, all methods failed - return a clear error message
+            error_msg = f"All methods failed to retrieve data for {instrument}."
+            logger.error(error_msg)
+            return f"⚠️ <b>Data Error:</b> {error_msg}\n\nUnable to retrieve market data at this time. Please try again later."
             
         except Exception as e:
             logger.error(f"Error getting technical analysis for {instrument}: {str(e)}")
