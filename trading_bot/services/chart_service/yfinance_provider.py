@@ -85,7 +85,7 @@ class YahooFinanceProvider:
         "query2.finance.yahoo.com", 
         "query1.finance.yahoo.com"
     ]
-    
+
     @staticmethod
     def _get_session():
         """Get or create a requests session with retry logic"""
@@ -94,7 +94,7 @@ class YahooFinanceProvider:
             
             # Configure retry strategy
             retries = Retry(
-                total=3,
+                total=3, 
                 backoff_factor=1.0,
                 status_forcelist=[429, 500, 502, 503, 504]
             )
@@ -127,7 +127,7 @@ class YahooFinanceProvider:
         })
         
         return YahooFinanceProvider._session
-    
+
     @staticmethod
     def _wait_for_rate_limit():
         """Ensures a minimum delay between consecutive API calls."""
@@ -176,7 +176,7 @@ class YahooFinanceProvider:
             start_date = end_date - timedelta(days=30)  # 30 days before end_date
         
         return start_date, end_date
-    
+
     @staticmethod
     def _format_symbol(symbol: str) -> str:
         """Format symbol for Yahoo Finance API"""
@@ -223,7 +223,7 @@ class YahooFinanceProvider:
             return f"{base}{quote}=X"
         
         return symbol
-    
+
     @staticmethod
     def _validate_and_clean_data(df: pd.DataFrame) -> pd.DataFrame:
         """Perform basic validation and cleaning of market data"""
@@ -361,7 +361,7 @@ class YahooFinanceProvider:
                 time.sleep(5)
                 
             return None
-    
+
     @staticmethod
     def _download_market_data(symbol, formatted_symbol, timeframe, start_date, end_date, interval):
         """Download market data with multiple attempts and methods"""
@@ -417,9 +417,9 @@ class YahooFinanceProvider:
                 if df is not None and not df.empty:
                     logger.info(f"[Yahoo] Successfully got data using alternative symbol {alt}")
                     break
-        
-        return df
-    
+            
+            return df
+            
     @classmethod
     def get_market_data(cls, symbol, timeframe, limit=None, **kwargs):
         """
@@ -654,7 +654,7 @@ class YahooFinanceProvider:
         
         # Default case: return as is
         return symbol
-    
+
     @staticmethod
     def _calculate_start_date(end_date, timeframe, limit):
         """Calculate the start date based on the timeframe and limit"""
@@ -792,7 +792,6 @@ class YahooFinanceProvider:
             df = df.dropna()
             
             return df
-            
         except Exception as e:
             logger.error(f"[Yahoo] Error processing DataFrame: {str(e)}")
             logger.error(traceback.format_exc())
