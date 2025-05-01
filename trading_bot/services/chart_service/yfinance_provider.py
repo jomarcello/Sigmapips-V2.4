@@ -700,10 +700,10 @@ class YahooFinanceProvider:
             base_prices = {
                 "XAUUSD": 2200.0,  # Gold
                 "XAGUSD": 28.0,    # Silver
-                "XTIUSD": 75.0,     # WTI Crude
-                "WTIUSD": 75.0,     # WTI Crude
-                "USOIL": 75.0,      # Another name for WTI
-                "XBRUSD": 80.0,     # Brent Crude
+                "XTIUSD": 100.5,     # WTI Crude
+                "WTIUSD": 100.5,     # WTI Crude
+                "USOIL": 100.5,      # Another name for WTI
+                "XBRUSD": 105.0,     # Brent Crude
                 "NATGAS": 2.10,     # Natural Gas
                 "COPPER": 4.50,     # Copper
                 "XPDUSD": 900.0,    # Palladium
