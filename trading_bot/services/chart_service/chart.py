@@ -607,866 +607,222 @@ class ChartService:
             return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
-        """
-        Get technical analysis for an instrument.
-        
-        Args:
-            instrument: The trading instrument (e.g., EURUSD, BTCUSD)
-            timeframe: The timeframe for analysis (e.g., 1h, 4h, 1d)
-            
-        Returns:
-            str: Technical analysis text
-        """
+        """Get technical analysis for a specific instrument and timeframe."""
         try:
-            # Get the current time for cache lookups
+            # First check if we have a cached analysis that's still valid
+            cache_key = f"{instrument}_{timeframe}"
             current_time = time.time()
             
-            # Create a cache key
-            cache_key = f"{instrument}_{timeframe}"
-            
-            # Check if we have a cached analysis that's still valid (less than 5 minutes old)
             if cache_key in self.analysis_cache:
-                cached_time, cached_analysis = self.analysis_cache[cache_key]
-                if current_time - cached_time < 300:  # 5 minutes in seconds
-                    logger.info(f"Using cached analysis for {instrument} on {timeframe}")
-                    return cached_analysis
+                cached_data = self.analysis_cache[cache_key]
+                if current_time - cached_data['timestamp'] < self.analysis_cache_ttl:
+                    # Cache is still valid
+                    logger.info(f"Using cached analysis for {instrument} {timeframe}")
+                    return cached_data['analysis']
             
-            # Log that we're generating a new analysis
-            logger.info(f"Generating new technical analysis for {instrument} on {timeframe}")
+            # No valid cache, so we need to generate a new analysis
+            logger.info(f"Generating technical analysis for {instrument} {timeframe}")
             
-            # Detect the market type
+            # Normalize the instrument name
+            instrument = self._normalize_instrument_name(instrument)
+            
+            # Detect market type
             market_type = await self._detect_market_type(instrument)
             logger.info(f"Detected market type: {market_type} for {instrument}")
             
-            # Extra veiligheidscontrole: voorkom Yahoo Finance voor crypto symbolen
-            is_crypto = market_type == "crypto"
-            # Verwijder oude controle die niet-crypto instrumenten als crypto behandelde
-            if is_crypto:
-                logger.info(f"Confirmed {instrument} is crypto - using appropriate providers")
-            else:
-                logger.info(f"Confirmed {instrument} is {market_type} - using appropriate providers")
-        except Exception as e:
-            logger.error(f"Error in initial setup for technical analysis: {str(e)}")
-            return await self._generate_default_analysis(instrument, timeframe)
-        
-        try:
-            # Get the available data providers
-            binance_provider = None
-            yahoo_provider = None
-            alltick_provider = None
+            if market_type == 'crypto':
+                # For crypto, we prefer to use the Binance provider
+                logger.info(f"Using Binance provider for crypto instrument {instrument}")
+                for provider in self.chart_providers:
+                    if isinstance(provider, BinanceProvider):
+                        try:
+                            # Most crypto charts will be analyzed via the price data from Binance
+                            logger.info(f"Getting analysis from Binance for {instrument}")
+                            df = await provider.get_price_data(instrument, timeframe)
+                            
+                            if df is not None and not df.empty:
+                                logger.info(f"Successfully got data from Binance for {instrument}")
+                                analysis = await self._analyze_market_data(instrument, timeframe, df, market_type)
+                                
+                                # Cache the analysis
+                                self.analysis_cache[cache_key] = {
+                                    'analysis': analysis,
+                                    'timestamp': current_time
+                                }
+                                
+                                return analysis
+                            else:
+                                logger.warning(f"Binance provider returned no data for {instrument}")
+                        except Exception as e:
+                            logger.error(f"Error with Binance provider for {instrument}: {str(e)}")
             
-            try:
-                from trading_bot.services.chart_service.binance_provider import BinanceProvider
-                binance_provider = BinanceProvider()
-            except Exception as e:
-                logger.error(f"Failed to load BinanceProvider: {str(e)}")
-                
-            # Alleen Yahoo Provider laden als het GEEN crypto is
-            if not is_crypto:
+            # For non-crypto or if Binance failed, try other providers
+            logger.info(f"Trying other providers for {instrument}")
+            for provider in self.chart_providers:
                 try:
-                    from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
-                    yahoo_provider = YahooFinanceProvider()
-                    logger.info(f"Loaded YahooFinanceProvider for non-crypto instrument: {instrument}")
+                    logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
+                    
+                    # Handle YahooFinanceProvider differently since it returns a tuple 
+                    if isinstance(provider, YahooFinanceProvider):
+                        price_data, info = provider.get_market_data(instrument, timeframe)
+                        
+                        # Check if we got valid data
+                        if price_data is not None and not price_data.empty:
+                            logger.info(f"Successfully got data from Yahoo for {instrument}")
+                            analysis = await self._analyze_market_data(instrument, timeframe, price_data, market_type)
+                            
+                            # Cache the analysis
+                            self.analysis_cache[cache_key] = {
+                                'analysis': analysis,
+                                'timestamp': current_time
+                            }
+                            
+                            return analysis
+                        elif isinstance(info, dict) and 'error' in info:
+                            logger.warning(f"Yahoo provider error for {instrument}: {info['message']}")
+                        else:
+                            logger.warning(f"Yahoo provider returned no data for {instrument}")
+                    else:
+                        # Standard provider handling
+                        df = await provider.get_price_data(instrument, timeframe)
+                        
+                        if df is not None and not df.empty:
+                            logger.info(f"Successfully got data with {provider.__class__.__name__} for {instrument}")
+                            analysis = await self._analyze_market_data(instrument, timeframe, df, market_type)
+                            
+                            # Cache the analysis
+                            self.analysis_cache[cache_key] = {
+                                'analysis': analysis,
+                                'timestamp': current_time
+                            }
+                            
+                            return analysis
+                        else:
+                            logger.warning(f"Provider {provider.__class__.__name__} returned no data for {instrument}")
                 except Exception as e:
-                    logger.error(f"Failed to load YahooFinanceProvider: {str(e)}")
-            else:
-                logger.info(f"Skipped loading YahooFinanceProvider for crypto instrument: {instrument}")
-                
-            # We don't use AllTickProvider at all
-            alltick_provider = None
-        except Exception as e:
-            logger.error(f"Error in provider setup for technical analysis: {str(e)}")
-            return await self._generate_default_analysis(instrument, timeframe)
-
-        # Main provider initialization block
-        try:
-            # Extra controle: Yahoo Finance alleen voor niet-crypto
-            try:
-                if not is_crypto and yahoo_provider:
-                    logger.info(f"Yahoo Finance provider is available for non-crypto instrument: {instrument}")
-                elif is_crypto:
-                    logger.info(f"Yahoo Finance provider is intentionally skipped for crypto: {instrument}")
-            except Exception as e:
-                logger.error(f"Error in Yahoo Finance availability check: {str(e)}")
-                
-            # Initialization completed successfully
-        except Exception as e:
-            logger.error(f"Error in provider initialization: {str(e)}")
-
-        # Determine the preferred provider order
-        providers_to_try = []
-        
-        if is_crypto:
-            logger.info(f"Using Binance provider for crypto {instrument}")
-            # First try Binance if available
-            if binance_provider:
-                providers_to_try.append(binance_provider)
-                logger.info(f"Added Binance provider for crypto {instrument}")
-            # GEEN andere providers voor crypto
-            logger.info(f"Yahoo Finance and AllTick are intentionally excluded for crypto instrument: {instrument}")
-        elif market_type == "commodity":
-            logger.info(f"Using Yahoo Finance for commodity {instrument}")
-            if yahoo_provider:
-                providers_to_try.append(yahoo_provider)
-                logger.info(f"Added Yahoo provider for commodity {instrument}")
-            # AllTickProvider is removed as we never use it
-        else:  # forex, index
-            logger.info(f"Using Yahoo Finance for {market_type} {instrument}")
-            if yahoo_provider:
-                providers_to_try.append(yahoo_provider)
-                logger.info(f"Added Yahoo provider for {market_type} {instrument}")
-            # AllTickProvider is removed as we never use it
-        
-        # Log de uiteindelijke volgorde
-        provider_names = [p.__class__.__name__ for p in providers_to_try]
-        logger.info(f"Final provider order for {instrument}: {provider_names}")
-        
-        # Try the providers in the determined order
-        successful_provider = None
-        market_data_result = None # Gebruik een andere naam om verwarring te voorkomen
-        analysis_data = {}      # Houd de dictionary voor uiteindelijke data
-        
-        for provider in providers_to_try:
-            try:
-                logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
-                
-                # Special handling for Binance with crypto symbols
-                if market_type == "crypto" and provider.__class__.__name__ == "BinanceProvider":
-                    # Format the symbol for Binance (BTCUSD -> BTCUSDT)
-                    crypto_symbol = instrument
-                    if crypto_symbol.endswith("USD") and not crypto_symbol.endswith("USDT"):
-                        crypto_symbol = crypto_symbol.replace("USD", "USDT")
-                        logger.info(f"Formatted crypto symbol for Binance: {instrument} -> {crypto_symbol}")
-                    else:
-                        logger.info(f"Using original symbol for Binance: {crypto_symbol}")
-                        
-                    # Use the formatted symbol for Binance
-                    market_data_result = await provider.get_market_data(crypto_symbol, timeframe)
-                else:
-                    # For other providers or non-crypto, use the original instrument
-                    market_data_result = await provider.get_market_data(instrument, timeframe)
-                
-                # Controleer het resultaat
-                if market_data_result is None:
-                    logger.warning(f"Provider {provider.__class__.__name__} returned None for {instrument}")
-                    continue
-                
-                # --- NIEUWE LOGICA VOOR TYPE CHECK --- 
-                is_valid_data = False
-                # BinanceProvider retourneert een namedtuple met een 'indicators' dict
-                if hasattr(market_data_result, 'indicators') and isinstance(market_data_result.indicators, dict) and market_data_result.indicators:
-                    logger.info(f"Provider {provider.__class__.__name__} returned MarketData with indicators")
-                    analysis_data = market_data_result.indicators # Gebruik de indicators dict direct
-                    is_valid_data = True
-                # YahooFinanceProvider retourneert een DataFrame
-                elif isinstance(market_data_result, pd.DataFrame) and not market_data_result.empty:
-                    logger.info(f"Provider {provider.__class__.__name__} returned DataFrame with shape {market_data_result.shape}")
-                    # We moeten hier de indicatoren nog berekenen
-                    # Dit gebeurt later in de code, dus markeer als succesvol
-                    is_valid_data = True 
-                    # Bewaar het dataframe voor latere indicatorberekening
-                    market_data_df = market_data_result 
-                elif isinstance(market_data_result, pd.DataFrame) and market_data_result.empty:
-                     logger.warning(f"Provider {provider.__class__.__name__} returned empty DataFrame for {instrument}")
-                     continue
-                     
-                if is_valid_data:
-                    successful_provider = provider
-                    break # Stop zodra we succesvolle data hebben
-                else:
-                     logger.warning(f"Provider {provider.__class__.__name__} returned unexpected data type for {instrument}: {type(market_data_result)}")
-                     continue
+                    logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
+                    logger.error(f"Error type: {type(e).__name__}")
+            
+            # If all providers failed, use a specific method based on market type
+            if market_type == 'crypto':
+                logger.warning(f"All providers failed for crypto {instrument}, trying crypto-specific methods")
+                # Get price from crypto-specific method
+                price = await self._fetch_crypto_price(instrument)
+                if price:
+                    logger.info(f"Got crypto price {price} for {instrument}")
+                    analysis = await self._generate_default_analysis(instrument, timeframe)
                     
-            except Exception as e:
-                # Check for Binance geo-restriction error and handle gracefully
-                error_str = str(e)
-                error_type = type(e).__name__
-                
-                if "Binance" in provider.__class__.__name__ and ("restricted location" in error_str or "eligibility" in error_str.lower()):
-                    logger.warning(f"Binance API access is geo-restricted. Skipping Binance and trying alternatives.")
-                    continue
-                
-                # Enhanced error logging
-                logger.warning(f"Provider {provider.__class__.__name__} failed: {str(e)}")
-                logger.warning(f"Error type: {error_type}")
-                logger.debug(traceback.format_exc())
-                continue
-                
-        # Special handling for commodities (blijft grotendeels hetzelfde)
-        if successful_provider is None and market_type == "commodity":
-            logger.info(f"All providers failed for commodity {instrument}, using commodity-specific methods")
-            try:
-                # Always use Yahoo Finance method for all commodities, including oil-related
-                logger.info(f"Using Yahoo Finance for commodity {instrument}")
-                current_price = await self._fetch_commodity_price(instrument)
-                
-                if current_price:
-                    logger.info(f"Got commodity price {current_price} for {instrument} from Yahoo Finance")
-                    
-                    # Create a basic dataset with the current price and some reasonable indicators
-                    base_price = current_price
-                    # Generate a plausible dataset for technical analysis
-                    analysis_data = {
-                        "close": current_price,
-                        "open": base_price * (1 + random.uniform(-0.005, 0.005)),
-                        "high": base_price * (1 + random.uniform(0.001, 0.01)),
-                        "low": base_price * (1 - random.uniform(0.001, 0.01)),
-                        "volume": random.uniform(50000, 150000),
-                        "ema_20": base_price * (1 - random.uniform(0.005, 0.02)),
-                        "ema_50": base_price * (1 - random.uniform(0.01, 0.03)),
-                        "ema_200": base_price * (1 - random.uniform(0.02, 0.05)),
-                        "rsi": random.uniform(40, 60),
-                        "macd": random.uniform(-0.5, 0.5),
-                        "macd_signal": random.uniform(-0.5, 0.5),
-                        "macd_hist": random.uniform(-0.2, 0.2)
+                    # Cache the analysis
+                    self.analysis_cache[cache_key] = {
+                        'analysis': analysis,
+                        'timestamp': current_time
                     }
                     
-                    # Set the MACD histogram to be consistent with MACD and signal
-                    analysis_data["macd_hist"] = analysis_data["macd"] - analysis_data["macd_signal"]
-                else:
-                    logger.warning(f"Could not get commodity price for {instrument}, using default analysis")
-                    return await self._generate_default_analysis(instrument, timeframe)
-            except Exception as e:
-                logger.error(f"Error getting commodity data: {str(e)}")
-                return await self._generate_default_analysis(instrument, timeframe)
-        
-        # Special handling for crypto if all providers failed
-        elif successful_provider is None and market_type == "crypto":
-            logger.info(f"Binance API failed for crypto {instrument}, using default values")
-            try:
-                # Get price from our specialized crypto method
-                symbol_base = instrument.replace("USD", "").replace("USDT", "")
-                current_price = await self._fetch_crypto_price(symbol_base)
-                
-                if current_price:
-                    logger.info(f"Got crypto price {current_price} for {instrument} using default values")
-                    
-                    # Create a basic dataset with the current price and some reasonable indicators
-                    base_price = current_price
-                    # Generate a plausible dataset for technical analysis
-                    analysis_data = {
-                        "close": current_price,
-                        "open": base_price * (1 + random.uniform(-0.01, 0.01)),
-                        "high": base_price * (1 + random.uniform(0.005, 0.02)),
-                        "low": base_price * (1 - random.uniform(0.005, 0.02)),
-                        "volume": random.uniform(1000000, 5000000),
-                        "ema_20": base_price * (1 - random.uniform(0.01, 0.03)),
-                        "ema_50": base_price * (1 - random.uniform(0.02, 0.04)),
-                        "ema_200": base_price * (1 - random.uniform(0.03, 0.06)),
-                        "rsi": random.uniform(40, 60),
-                        "macd": random.uniform(-0.0005, 0.0005),
-                        "macd_signal": random.uniform(-0.0005, 0.0005),
-                        "macd_hist": random.uniform(-0.0002, 0.0002)
-                    }
-                    
-                    # Set the MACD histogram to be consistent with MACD and signal
-                    analysis_data["macd_hist"] = analysis_data["macd"] - analysis_data["macd_signal"]
-                    successful_provider = "DirectCryptoAPI"
-                else:
-                    logger.warning(f"Could not get crypto price for {instrument}, using default analysis")
-                    return await self._generate_default_analysis(instrument, timeframe)
-            except Exception as e:
-                logger.error(f"Error getting crypto data: {str(e)}")
-                return await self._generate_default_analysis(instrument, timeframe)
-        
-        # Als geen enkele provider succesvol was (en geen commodity of crypto)
-        elif successful_provider is None:
-            logger.warning(f"All providers failed for {instrument}, using generated fallback analysis")
-            return await self._generate_default_analysis(instrument, timeframe)
-        
-        # Als we data hebben, maar nog geen indicatoren (omdat het van Yahoo kwam)
-        # Moeten we de indicatoren hier berekenen
-        if successful_provider and 'market_data_df' in locals():
-            # Check if YahooFinanceProvider exists, as it might not be imported for crypto
-            is_yahoo_provider = successful_provider.__class__.__name__ == "YahooFinanceProvider"
-            
-            if is_yahoo_provider:
-                logger.info(f"Calculating technical indicators for {instrument} from Yahoo market data...")
-                try:
-                    # Bereken indicatoren uit het DataFrame van Yahoo
-                    df = market_data_df.copy()
-                    # ... (exact dezelfde indicator berekeningslogica als voorheen)
-                    # Calculate EMAs
-                    if len(df) >= 200:
-                        df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
-                        df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-                        df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
-                        latest_ema20 = df['EMA20'].iloc[-1]
-                        latest_ema50 = df['EMA50'].iloc[-1]
-                        latest_ema200 = df['EMA200'].iloc[-1]
-                    else:
-                         # ... (fallback EMA logic)
-                        pass 
-                    # Calculate RSI
-                    if len(df) >= 14:
-                        # ... (RSI logic) ...
-                        latest_rsi = df['RSI'].iloc[-1]
-                    else:
-                         latest_rsi = 50
-                    # Calculate MACD
-                    if len(df) >= 26:
-                         # ... (MACD logic) ...
-                        latest_macd = df['MACD'].iloc[-1]
-                        latest_macd_signal = df['MACD_Signal'].iloc[-1]
-                    else:
-                         latest_macd = 0
-                         latest_macd_signal = 0
-                    
-                    latest = df.iloc[-1] # Zorg ervoor dat we de laatste rij hebben voor OHLC
-                    # Store the calculated indicators in analysis_data
-                    analysis_data = {
-                        "close": latest['Close'],
-                        "open": latest['Open'],
-                        "high": latest['High'],
-                        "low": latest['Low'],
-                        "volume": latest.get('Volume', 0),
-                        "ema_20": latest_ema20, 
-                        "ema_50": latest_ema50,
-                        "ema_200": latest_ema200,
-                        "rsi": latest_rsi,
-                        "macd": latest_macd,
-                        "macd_signal": latest_macd_signal,
-                        "macd_hist": latest_macd - latest_macd_signal
-                    }
-                    logger.info(f"Successfully calculated indicators for {instrument} from Yahoo data")
-                except Exception as calc_e:
-                    logger.error(f"Error calculating indicators from Yahoo data: {str(calc_e)}")
-                    logger.error(traceback.format_exc())
-                    return await self._generate_default_analysis(instrument, timeframe)
-
-        # Nu hebben we altijd een gevulde analysis_data dictionary, 
-        # ofwel direct van Binance, ofwel berekend uit Yahoo data, ofwel van commodity fallback
-        if analysis_data:
-            logger.info(f"Formatting analysis data for {instrument}")
-            # ... (bestaande code om analysis_data te formatteren naar tekst) ...
-            current_price = analysis_data["close"]
-            ema_20 = analysis_data.get("ema_20", analysis_data.get("EMA20")) # Handle different casing
-            ema_50 = analysis_data.get("ema_50", analysis_data.get("EMA50"))
-            ema_200 = analysis_data.get("ema_200", analysis_data.get("EMA200"))
-            rsi = analysis_data.get("rsi", analysis_data.get("RSI"))
-            # Handle possible different MACD key names from Binance vs calculated
-            macd = analysis_data.get("macd", analysis_data.get("MACD.macd"))
-            macd_signal = analysis_data.get("macd_signal", analysis_data.get("MACD.signal"))
-            
-            # Check if any required value is None before proceeding
-            if None in [current_price, ema_20, ema_50, ema_200, rsi, macd, macd_signal]:
-                logger.error(f"Missing key indicator values in analysis_data for {instrument}. Falling back.")
-                return await self._generate_default_analysis(instrument, timeframe)
-            
-            # ... (rest van de formatting logic blijft hetzelfde) ...
-        
-        else:
-            # Dit zou niet moeten gebeuren als de logica correct is, maar als fallback:
-            logger.error(f"Analysis_data dictionary is empty after provider attempts for {instrument}. Falling back.")
-            return await self._generate_default_analysis(instrument, timeframe)
-        
-        # If we have analysis data, format it
-        if analysis_data:
-            logger.info(f"Successfully retrieved analysis data for {instrument}")
-            
-            try:
-                # Get values using our expected field names with fallbacks for different cases
-                current_price = analysis_data["close"]
-                ema_20 = analysis_data.get("ema_20", analysis_data.get("EMA20", 0))
-                ema_50 = analysis_data.get("ema_50", analysis_data.get("EMA50", 0))
-                ema_200 = analysis_data.get("ema_200", analysis_data.get("EMA200", 0))
-                rsi = analysis_data.get("rsi", analysis_data.get("RSI", 50))
-                macd = analysis_data.get("macd", analysis_data.get("MACD", 0))
-                macd_signal = analysis_data.get("macd_signal", analysis_data.get("MACD_signal", 0))
-                
-                # Determine trend based on EMAs
-                trend = "NEUTRAL"
-                if ema_20 > ema_50:
-                    trend = "BULLISH"
-                elif ema_20 < ema_50:
-                    trend = "BEARISH"
-                
-                # Determine RSI conditions
-                rsi_condition = "NEUTRAL"
-                if rsi >= 70:
-                    rsi_condition = "OVERBOUGHT"
-                elif rsi <= 30:
-                    rsi_condition = "OVERSOLD"
-                
-                # Determine MACD signal
-                macd_signal_text = "NEUTRAL"
-                if macd > macd_signal:
-                    macd_signal_text = "BULLISH"
-                elif macd < macd_signal:
-                    macd_signal_text = "BEARISH"
-                
-                # Calculate high/low values for daily and weekly ranges
-                # These were missing and causing the error
-                current_price = analysis_data.get("close", 0)
-                price_high = analysis_data.get("high", current_price * 1.01)
-                price_low = analysis_data.get("low", current_price * 0.99)
-                
-                # Create daily and weekly ranges with realistic variations
-                daily_high = price_high
-                daily_low = price_low
-                weekly_high = price_high * 1.02  # 2% higher than daily high
-                weekly_low = price_low * 0.98    # 2% lower than daily low
-                
-                # Get the appropriate decimal precision for this instrument
-                precision = self._get_instrument_precision(instrument)
-                
-                # Format the analysis using the same format as the main method
-                # Verwijder timeframe en maak instrument bold
-                analysis_text = f"<b>{instrument}</b> Analysis\n\n"
-                
-                analysis_text += f"<b>Zone Strength:</b> {'★' * min(5, max(1, int(rsi/20)))}\n\n"
-                
-                # Market overview section
-                analysis_text += f"📊 <b>Market Overview</b>\n"
-                if instrument == "XAUUSD":
-                    # Format gold price with comma after first digit
-                    price_first_digit = str(int(current_price))[0]
-                    price_rest_digits = f"{current_price:.3f}".split('.')[0][1:] + "." + f"{current_price:.3f}".split('.')[1]
-                    formatted_price = f"{price_first_digit},{price_rest_digits}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif instrument == "US30":
-                    # Format US30 price with comma after second digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif instrument == "US500":
-                    # Format US500 price with comma after first digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[0]},{price_digits[1:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif instrument == "US100":
-                    # Format US100 price with comma after second digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
-                    # Format cryptocurrency price using the format_crypto function
-                    def format_crypto(price):
-                        # Bitcoin and high-value coins (>10000) - format with whole numbers
-                        if price > 10000:
-                            price_str = f"{int(price):,}"
-                            return price_str
-                        # Medium value coins (100-9999) - format with 1 decimal place
-                        elif price >= 100:
-                            price_str = f"{price:.1f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-                        # XRP specifiek formaat met 5 decimalen
-                        elif "XRP" in instrument:
-                            price_str = f"{price:.5f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-                        # Lower value coins (<100) - format with 2 decimal places
-                        else:
-                            price_str = f"{price:.2f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-                    
-                    formatted_price = format_crypto(current_price)
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                else:
-                    analysis_text += f"Price is currently trading near current price of {current_price:.{precision}f}, "
-                
-                # Continue with the rest of the analysis text
-                analysis_text += f"showing {'bullish' if trend == 'BUY' else 'bearish' if trend == 'SELL' else 'mixed'} momentum. "
-                analysis_text += f"The pair remains {'above' if current_price > ema_50 else 'below'} key EMAs, "
-                analysis_text += f"indicating a {'strong uptrend' if trend == 'BUY' else 'strong downtrend' if trend == 'SELL' else 'consolidation phase'}. "
-                analysis_text += f"Volume is moderate, supporting the current price action.\n\n"
-                
-                # Key levels section
-                analysis_text += f"🔑 <b>Key Levels</b>\n"
-                if instrument == "XAUUSD":
-                    # Format gold prices with comma after first digit
-                    def format_gold(price):
-                        price_str = f"{price:.3f}"
-                        parts = price_str.split('.')
-                        return f"{parts[0][0]},{parts[0][1:]}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_gold(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_gold(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_gold(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_gold(weekly_low)}\n\n"
-
-                elif instrument == "US30":
-                    # Format US30 prices with comma after second digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif instrument == "US500":
-                    # Format US500 prices with comma after first digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[0]},{price_digits[1:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif instrument == "US100":
-                    # Format US100 price with comma after second digit
-                    price_digits = str(int(current_price))
-                    formatted_price = f"{price_digits[:2]},{price_digits[2:]}.{f'{current_price:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Price is currently trading near current price of {formatted_price}, "
-                elif any(crypto in instrument for crypto in ["BTC", "ETH", "XRP", "SOL", "BNB", "ADA", "DOGE", "DOT", "AVAX", "MATIC"]):
-                    # Format cryptocurrency prices based on their value
-                    def format_crypto(price):
-                        # Bitcoin and high-value coins (>10000) - format with whole numbers
-                        if price > 10000:
-                            price_str = f"{int(price):,}"
-                            return price_str
-                        # Medium value coins (100-9999) - format with 1 decimal place
-                        elif price >= 100:
-                            price_str = f"{price:.1f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-                        # XRP specifiek formaat met 5 decimalen
-                        elif "XRP" in instrument:
-                            price_str = f"{price:.5f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-                        # Lower value coins (<100) - format with 2 decimal places
-                        else:
-                            price_str = f"{price:.2f}"
-                            parts = price_str.split('.')
-                            formatted_integer = f"{int(parts[0]):,}"
-                            return f"{formatted_integer}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_crypto(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_crypto(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_crypto(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_crypto(weekly_low)}\n\n"
-                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
-                    # Format oil prices with 2 decimal places
-                    def format_oil(price):
-                        price_str = f"{price:.2f}"
-                        parts = price_str.split('.')
-                        digits = parts[0]
-                        # Format oil with commas for thousands
-                        formatted_integer = f"{int(digits):,}"
-                        return f"{formatted_integer}.{parts[1]}"
-
-                    analysis_text += f"Daily High:   {format_oil(daily_high)}\n"
-                    analysis_text += f"Daily Low:    {format_oil(daily_low)}\n"
-                    analysis_text += f"Weekly High:  {format_oil(weekly_high)}\n"
-                    analysis_text += f"Weekly Low:   {format_oil(weekly_low)}\n\n"
-                else:
-                    analysis_text += f"Daily High:   {daily_high:.{precision}f}\n"
-                    analysis_text += f"Daily Low:    {daily_low:.{precision}f}\n"
-                    analysis_text += f"Weekly High:  {weekly_high:.{precision}f}\n"
-                    analysis_text += f"Weekly Low:   {weekly_low:.{precision}f}\n\n"
-
-                # Technical indicators section
-                analysis_text += f"📈 <b>Technical Indicators</b>\n"
-                rsi_value = analysis_data.get('rsi', analysis_data.get('RSI', 50))
-                if rsi_value > 70:
-                    rsi_status = "overbought"
-                elif rsi_value < 30:
-                    rsi_status = "oversold"
-                else:
-                    rsi_status = "neutral"
-                analysis_text += f"RSI: {rsi_value:.2f} ({rsi_status})\n"
-                
-                macd = analysis_data.get("macd", analysis_data.get("MACD", 0))
-                macd_signal = analysis_data.get("macd_signal", analysis_data.get("MACD_signal", 0))
-                macd_status = "bullish" if macd > macd_signal else "bearish"
-                analysis_text += f"MACD: {macd_status} ({macd:.5f} is {'above' if macd > macd_signal else 'below'} signal {macd_signal:.5f})\n"
-                
-                ma_status = "bullish" if trend == "BUY" else "bearish" if trend == "SELL" else "mixed"
-                if instrument == "XAUUSD":
-                    # Format gold EMAs with comma after first digit
-                    ema50_first_digit = str(int(ema_50))[0]
-                    ema50_rest_digits = f"{ema_50:.3f}".split('.')[0][1:] + "." + f"{ema_50:.3f}".split('.')[1]
-                    formatted_ema50 = f"{ema50_first_digit},{ema50_rest_digits}"
-                    
-                    ema200_first_digit = str(int(ema_200))[0]
-                    ema200_rest_digits = f"{ema_200:.3f}".split('.')[0][1:] + "." + f"{ema_200:.3f}".split('.')[1]
-                    formatted_ema200 = f"{ema200_first_digit},{ema200_rest_digits}"
-                    
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({formatted_ema50}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({formatted_ema200}), confirming {ma_status} bias.\n\n"
-                elif instrument == "US30":
-                    # Format US30 EMAs with comma after second digit
-                    ema50_digits = str(int(ema_50))
-                    ema50_formatted = f"{ema50_digits[:2]},{ema50_digits[2:]}.{f'{ema_50:.2f}'.split('.')[1]}"
-                    
-                    ema200_digits = str(int(ema_200))
-                    ema200_formatted = f"{ema200_digits[:2]},{ema200_digits[2:]}.{f'{ema_200:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
-                elif instrument == "US500":
-                    # Format US500 EMAs with comma after first digit
-                    ema50_digits = str(int(ema_50))
-                    ema50_formatted = f"{ema50_digits[0]},{ema50_digits[1:]}.{f'{ema_50:.2f}'.split('.')[1]}"
-                    
-                    ema200_digits = str(int(ema_200))
-                    ema200_formatted = f"{ema200_digits[0]},{ema200_digits[1:]}.{f'{ema_200:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
-                elif instrument == "US100":
-                    # Format US100 EMAs with comma after second digit
-                    ema50_digits = str(int(ema_50))
-                    ema50_formatted = f"{ema50_digits[:2]},{ema50_digits[2:]}.{f'{ema_50:.2f}'.split('.')[1]}"
-                    
-                    ema200_digits = str(int(ema_200))
-                    ema200_formatted = f"{ema200_digits[:2]},{ema200_digits[2:]}.{f'{ema_200:.2f}'.split('.')[1]}"
-                    
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
-                elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
-                    # Format oil EMAs with commas for thousands
-                    ema50_str = f"{ema_50:.2f}"
-                    ema50_parts = ema50_str.split('.')
-                    ema50_formatted = f"{int(ema50_parts[0]):,}.{ema50_parts[1]}"
-                    
-                    ema200_str = f"{ema_200:.2f}"
-                    ema200_parts = ema200_str.split('.')
-                    ema200_formatted = f"{int(ema200_parts[0]):,}.{ema200_parts[1]}"
-                    
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema50_formatted}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema200_formatted}), confirming {ma_status} bias.\n\n"
-                else:
-                    analysis_text += f"Moving Averages: Price {'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 50 ({ema_50:.{precision}f}) and "
-                    analysis_text += f"{'above' if trend == 'BUY' else 'below' if trend == 'SELL' else 'near'} EMA 200 ({ema_200:.{precision}f}), confirming {ma_status} bias.\n\n"
-                
-                # AI recommendation
-                analysis_text += f"🤖 <b>Sigmapips AI Recommendation</b>\n"
-                if trend == 'BULLISH':
-                    if instrument == "XAUUSD":
-                        # Format gold prices with comma after first digit
-                        high_first_digit = str(int(analysis_data['high']))[0]
-                        high_rest_digits = f"{analysis_data['high']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['high']:.3f}".split('.')[1]
-                        formatted_high = f"{high_first_digit},{high_rest_digits}"
-                        
-                        low_first_digit = str(int(analysis_data['low']))[0]
-                        low_rest_digits = f"{analysis_data['low']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['low']:.3f}".split('.')[1]
-                        formatted_low = f"{low_first_digit},{low_rest_digits}"
-                        
-                        analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    elif instrument == "US30":
-                        # Format US30 prices with comma after second digit
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    elif instrument == "US500":
-                        # Format US500 prices with comma after first digit
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
-
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
-
-                        analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    elif instrument == "US100":
-                        # Format US100 prices with comma after second digit
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        analysis_text += f"Watch for a breakout above {formatted_high} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {formatted_low}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
-                        # Format oil prices with 2 decimal places and commas for thousands
-                        daily_high_str = f"{daily_high:.2f}"
-                        daily_high_parts = daily_high_str.split('.')
-                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
-                        
-                        daily_low_str = f"{daily_low:.2f}"
-                        daily_low_parts = daily_low_str.split('.')
-                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
-                        
-                        analysis_text += f"Watch for a breakout above {formatted_daily_high} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {formatted_daily_low}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    else:
-                        analysis_text += f"Watch for a breakout above {analysis_data['high']:.{precision}f} for further upside. "
-                        analysis_text += f"Maintain a buy bias while price holds above {analysis_data['low']:.{precision}f}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                elif trend == 'BEARISH':
-                    if instrument == "XAUUSD":
-                        # Format gold prices with comma after first digit
-                        low_first_digit = str(int(analysis_data['low']))[0]
-                        low_rest_digits = f"{analysis_data['low']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['low']:.3f}".split('.')[1]
-                        formatted_low = f"{low_first_digit},{low_rest_digits}"
-                        
-                        high_first_digit = str(int(analysis_data['high']))[0]
-                        high_rest_digits = f"{analysis_data['high']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['high']:.3f}".split('.')[1]
-                        formatted_high = f"{high_first_digit},{high_rest_digits}"
-                        
-                        analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                    elif instrument == "US30":
-                        # Format US30 prices with comma after second digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                    elif instrument == "US500":
-                        # Format US500 prices with comma after first digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
-
-                        analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                    elif instrument == "US100":
-                        # Format US100 prices with comma after second digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        analysis_text += f"Watch for a breakdown below {formatted_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
-                        # Format oil prices with 2 decimal places and commas for thousands
-                        daily_low_str = f"{daily_low:.2f}"
-                        daily_low_parts = daily_low_str.split('.')
-                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
-                        
-                        daily_high_str = f"{daily_high:.2f}"
-                        daily_high_parts = daily_high_str.split('.')
-                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
-                        
-                        analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
-                        analysis_text += f"Be cautious of overbought conditions if RSI approaches 70.\n\n"
-                    else:
-                        analysis_text += f"Watch for a breakdown below {analysis_data['low']:.{precision}f} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {analysis_data['high']:.{precision}f}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                else:
-                    if instrument == "XAUUSD":
-                        # Format gold prices with comma after first digit
-                        low_first_digit = str(int(analysis_data['low']))[0]
-                        low_rest_digits = f"{analysis_data['low']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['low']:.3f}".split('.')[1]
-                        formatted_low = f"{low_first_digit},{low_rest_digits}"
-                        
-                        high_first_digit = str(int(analysis_data['high']))[0]
-                        high_rest_digits = f"{analysis_data['high']:.3f}".split('.')[0][1:] + "." + f"{analysis_data['high']:.3f}".split('.')[1]
-                        formatted_high = f"{high_first_digit},{high_rest_digits}"
-                        
-                        analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
-                        analysis_text += f"and selling opportunities near {formatted_high}. "
-                        analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
-                    elif instrument == "US30":
-                        # Format US30 prices with comma after second digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
-                        analysis_text += f"and selling opportunities near {formatted_high}. "
-                        analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
-                    elif instrument == "US500":
-                        # Format US500 prices with comma after first digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[0]},{low_digits[1:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[0]},{high_digits[1:]}.{high_decimal_part}"
-
-                        analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
-                        analysis_text += f"and selling opportunities near {formatted_high}. "
-                        analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
-                    elif instrument == "US100":
-                        # Format US100 prices with comma after second digit
-                        low_digits = str(int(analysis_data['low']))
-                        low_decimal_part = f'{analysis_data["low"]:.2f}'.split('.')[1]
-                        formatted_low = f"{low_digits[:2]},{low_digits[2:]}.{low_decimal_part}"
-
-                        high_digits = str(int(analysis_data['high']))
-                        high_decimal_part = f'{analysis_data["high"]:.2f}'.split('.')[1]
-                        formatted_high = f"{high_digits[:2]},{high_digits[2:]}.{high_decimal_part}"
-
-                        analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {formatted_low} "
-                        analysis_text += f"and selling opportunities near {formatted_high}. "
-                        analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
-                    elif instrument in ["WTIUSD", "XTIUSD", "OIL", "USOIL"]:
-                        # Format oil prices with 2 decimal places and commas for thousands
-                        daily_low_str = f"{daily_low:.2f}"
-                        daily_low_parts = daily_low_str.split('.')
-                        formatted_daily_low = f"{int(daily_low_parts[0]):,}.{daily_low_parts[1]}"
-                        
-                        daily_high_str = f"{daily_high:.2f}"
-                        daily_high_parts = daily_high_str.split('.')
-                        formatted_daily_high = f"{int(daily_high_parts[0]):,}.{daily_high_parts[1]}"
-                        
-                        analysis_text += f"Watch for a breakdown below {formatted_daily_low} for further downside. "
-                        analysis_text += f"Maintain a sell bias while price holds below {formatted_daily_high}. "
-                        analysis_text += f"Be cautious of oversold conditions if RSI approaches 30.\n\n"
-                    else:
-                        analysis_text += f"Range-bound conditions persist. Look for buying opportunities near {analysis_data['low']:.{precision}f} "
-                        analysis_text += f"and selling opportunities near {analysis_data['high']:.{precision}f}. "
-                        analysis_text += f"Wait for a clear breakout before establishing a directional bias.\n\n"
-                
-                analysis_text += f"⚠️ <b>Disclaimer:</b> For educational purposes only."
+                    return analysis
+            elif market_type == 'forex':
+                logger.warning(f"All providers failed for forex {instrument}, using forex-specific methods")
+                # For forex, we'll use a default template
+                analysis = await self._generate_default_analysis(instrument, timeframe)
                 
                 # Cache the analysis
-                self.analysis_cache[cache_key] = (current_time, analysis_text)
+                self.analysis_cache[cache_key] = {
+                    'analysis': analysis,
+                    'timestamp': current_time
+                }
                 
-                # --- DEBUG PRINT ADDED ---
-                print(f"\n--- DEBUG: Final analysis_text for {instrument} ---")
-                print(analysis_text)
-                print("--- END DEBUG ---\n")
-                # --- END DEBUG PRINT ---
+                return analysis
+            elif market_type == 'commodity':
+                logger.warning(f"All providers failed for commodity {instrument}, using commodity-specific methods")
                 
-                return analysis_text
-            except Exception as e:
-                logger.error(f"Error getting analysis from providers: {str(e)}")
-                logger.error(traceback.format_exc())
-                return await self._generate_default_analysis(instrument, timeframe)
-    
+                # For commodities, try Yahoo Finance directly
+                logger.info(f"Using Yahoo Finance for commodity {instrument}")
+                try:
+                    logger.info(f"Fetching {instrument} price from Yahoo Finance")
+                    
+                    # Get the Yahoo Finance symbol
+                    yahoo_symbol = instrument
+                    if instrument == "USOIL" or instrument == "XTIUSD" or instrument == "WTIUSD":
+                        yahoo_symbol = "CL=F"
+                        logger.info(f"Using Yahoo Finance symbol {yahoo_symbol} for {instrument}")
+                    elif instrument == "XAUUSD":
+                        yahoo_symbol = "GC=F"
+                        logger.info(f"Using Yahoo Finance symbol {yahoo_symbol} for {instrument}")
+                    elif instrument == "XAGUSD":
+                        yahoo_symbol = "SI=F"
+                        logger.info(f"Using Yahoo Finance symbol {yahoo_symbol} for {instrument}")
+                    
+                    # Try to get data directly using YahooFinanceProvider
+                    for provider in self.chart_providers:
+                        if isinstance(provider, YahooFinanceProvider):
+                            # Get market data returns a tuple (DataFrame, info_dict)
+                            price_data, info = provider.get_market_data(yahoo_symbol, timeframe)
+                            
+                            if price_data is not None and not price_data.empty:
+                                logger.info(f"Successfully got data from Yahoo for {yahoo_symbol}")
+                                analysis = await self._analyze_market_data(instrument, timeframe, price_data, market_type)
+                                
+                                # Cache the analysis
+                                self.analysis_cache[cache_key] = {
+                                    'analysis': analysis,
+                                    'timestamp': current_time
+                                }
+                                
+                                return analysis
+                            elif isinstance(info, dict) and 'error' in info:
+                                logger.warning(f"Yahoo provider error for {yahoo_symbol}: {info['message']}")
+                            else:
+                                logger.warning(f"Yahoo provider returned no data for {yahoo_symbol}")
+                except Exception as e:
+                    logger.error(f"Error fetching commodity price from Yahoo Finance: {str(e)}")
+                
+                # Fallback to default analysis if Yahoo Finance failed
+                logger.warning(f"Could not get commodity price for {instrument}, using default analysis")
+                analysis = await self._generate_default_analysis(instrument, timeframe)
+                
+                # Cache the analysis
+                self.analysis_cache[cache_key] = {
+                    'analysis': analysis,
+                    'timestamp': current_time
+                }
+                
+                return analysis
+            elif market_type == 'index':
+                logger.warning(f"All providers failed for index {instrument}, using index-specific methods")
+                
+                # For indices, try to fetch the current price
+                price = await self._fetch_index_price(instrument)
+                if price:
+                    logger.info(f"Got index price {price} for {instrument}")
+                    
+                analysis = await self._generate_default_analysis(instrument, timeframe)
+                
+                # Cache the analysis
+                self.analysis_cache[cache_key] = {
+                    'analysis': analysis,
+                    'timestamp': current_time
+                }
+                
+                return analysis
+            
+            # If we got here, all methods failed - generate a default analysis
+            logger.warning(f"All analysis methods failed for {instrument}, using default template")
+            analysis = await self._generate_default_analysis(instrument, timeframe)
+            
+            # Cache the analysis even though it's a fallback
+            self.analysis_cache[cache_key] = {
+                'analysis': analysis,
+                'timestamp': current_time
+            }
+            
+            return analysis
+            
+        except Exception as e:
+            logger.error(f"Error getting technical analysis for {instrument}: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Return a very basic analysis if everything fails
+            return f"Technical analysis for {instrument} ({timeframe}) is currently unavailable. Please try again later."
+
     async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
         """Generate a fallback analysis when the API fails"""
         try:
