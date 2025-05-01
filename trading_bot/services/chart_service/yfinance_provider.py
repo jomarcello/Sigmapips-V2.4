@@ -13,7 +13,6 @@ from urllib3.util.retry import Retry
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wait_fixed
 import yfinance as yf
 import functools
-from yfinance.utils import YFRateLimitError  # Import the specific error
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +29,19 @@ retry_rate_limit = dict(
     wait=wait_fixed(30),  # Use wait_fixed instead of wait_base
     reraise=True
 )
+
+# Function to check if an exception is a rate limit error
+def is_rate_limit_error(exception):
+    """Check if an exception is a rate limit error based on its message"""
+    error_msg = str(exception).lower()
+    rate_limit_phrases = [
+        "rate limit", 
+        "too many requests", 
+        "429", 
+        "rate limited", 
+        "try after a while"
+    ]
+    return any(phrase in error_msg for phrase in rate_limit_phrases)
 
 # List of user agents to rotate
 user_agents = [
@@ -150,12 +162,12 @@ class YahooFinanceProvider:
                     logger.info(f"[Yahoo] yf.download successful for {yf_symbol}, got {len(df)} rows")
                     return df # Success, return early
 
-            except YFRateLimitError as rle:
-                logger.error(f"[Yahoo] Rate Limited during yf.download for {yf_symbol}: {rle}. Will retry if possible.")
-                last_exception = rle # Store exception and continue to ticker.history or retry
-                df = None
             except Exception as download_e:
-                logger.warning(f"[Yahoo] yf.download failed for {yf_symbol}: {str(download_e)} type: {type(download_e).__name__}")
+                # Check if this is a rate limit error
+                if is_rate_limit_error(download_e):
+                    logger.error(f"[Yahoo] Rate Limited during yf.download for {yf_symbol}: {download_e}. Will retry if possible.")
+                else:
+                    logger.warning(f"[Yahoo] yf.download failed for {yf_symbol}: {str(download_e)} type: {type(download_e).__name__}")
                 last_exception = download_e
                 df = None
 
@@ -178,12 +190,12 @@ class YahooFinanceProvider:
                         logger.info(f"[Yahoo] Ticker.history successful for {yf_symbol}, got {len(df)} rows")
                         return df # Success
 
-                except YFRateLimitError as rle_ticker:
-                    logger.error(f"[Yahoo] Rate Limited during ticker.history for {yf_symbol}: {rle_ticker}. Will retry if possible.")
-                    last_exception = rle_ticker
-                    df = None
                 except Exception as ticker_e:
-                    logger.error(f"[Yahoo] Ticker.history method exception for {yf_symbol}: {str(ticker_e)} type: {type(ticker_e).__name__}")
+                    # Check if this is a rate limit error
+                    if is_rate_limit_error(ticker_e):
+                        logger.error(f"[Yahoo] Rate Limited during ticker.history for {yf_symbol}: {ticker_e}. Will retry if possible.")
+                    else:
+                        logger.error(f"[Yahoo] Ticker.history method exception for {yf_symbol}: {str(ticker_e)} type: {type(ticker_e).__name__}")
                     last_exception = ticker_e
                     df = None
             
@@ -191,8 +203,16 @@ class YahooFinanceProvider:
             if df is None or df.empty:
                 logger.warning(f"[Yahoo] Both yf.download and ticker.history failed for {yf_symbol} in this attempt.")
                 if last_exception:
-                    # Raise the specific exception (e.g., YFRateLimitError) to be handled by @retry
-                    raise last_exception 
+                    # If it's a rate limit error, handle it specially to trigger right retry behavior
+                    if is_rate_limit_error(last_exception):
+                        rate_limit_msg = f"Rate limited on Yahoo Finance API for {yf_symbol}"
+                        logger.error(f"[Yahoo] {rate_limit_msg}")
+                        # Create a custom exception with the rate limit message
+                        # This will still be caught and retried by the @retry decorator
+                        raise Exception(rate_limit_msg) from last_exception
+                    else:
+                        # Raise the original exception
+                        raise last_exception
                 else:
                     # Should not happen if attempts were made, but as a fallback
                     error_symbol = original_symbol if original_symbol else symbol
