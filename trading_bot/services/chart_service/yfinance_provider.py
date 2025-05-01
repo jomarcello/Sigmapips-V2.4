@@ -10,7 +10,7 @@ import random
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wait_base
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError, wait_fixed
 import yfinance as yf
 import functools
 from yfinance.utils import YFRateLimitError  # Import the specific error
@@ -27,7 +27,7 @@ retry_general = dict(
 # Specific retry strategy for rate limit errors
 retry_rate_limit = dict(
     stop=stop_after_attempt(4),  # Allow more attempts for rate limits
-    wait=wait_base(30),  # Wait a fixed 30 seconds for rate limits
+    wait=wait_fixed(30),  # Use wait_fixed instead of wait_base
     reraise=True
 )
 
