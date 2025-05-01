@@ -449,17 +449,50 @@ class YahooFinanceProvider:
             if timeframe == "4h":
                 logger.info(f"[Yahoo] Resampling 1h data to 4h for {symbol}")
                 try:
-                    df = df.resample('4h').agg({
-                        'Open': 'first',
-                        'High': 'max',
-                        'Low': 'min',
-                        'Close': 'last',
-                        'Volume': 'sum' if 'Volume' in df.columns else None
-                    })
-                    df.dropna(inplace=True)
-                    logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df.shape}")
+                    # Handle potential MultiIndex columns
+                    if isinstance(df.columns, pd.MultiIndex):
+                        # Get the column level names
+                        logger.info(f"[Yahoo] Detected MultiIndex with levels: {df.columns.names}")
+                        # Get the first ticker from the second level
+                        ticker = df.columns.get_level_values(1)[0] if len(df.columns.get_level_values(1)) > 0 else None
+                        
+                        # Create a dict of column mappings for aggregation
+                        agg_dict = {}
+                        if ('Open', ticker) in df.columns:
+                            agg_dict[('Open', ticker)] = 'first'
+                        if ('High', ticker) in df.columns:
+                            agg_dict[('High', ticker)] = 'max'
+                        if ('Low', ticker) in df.columns:
+                            agg_dict[('Low', ticker)] = 'min'
+                        if ('Close', ticker) in df.columns:
+                            agg_dict[('Close', ticker)] = 'last'
+                        if ('Volume', ticker) in df.columns:
+                            agg_dict[('Volume', ticker)] = 'sum'
+                        
+                        # Only resample if we have columns to aggregate
+                        if agg_dict:
+                            df = df.resample('4h').agg(agg_dict)
+                            df.dropna(inplace=True)
+                            logger.info(f"[Yahoo] Successfully resampled MultiIndex to 4h with shape {df.shape}")
+                        else:
+                            logger.error(f"[Yahoo] Could not identify columns for resampling in MultiIndex")
+                    else:
+                        # For standard column names
+                        agg_dict = {
+                            'Open': 'first',
+                            'High': 'max',
+                            'Low': 'min',
+                            'Close': 'last'
+                        }
+                        if 'Volume' in df.columns:
+                            agg_dict['Volume'] = 'sum'
+                            
+                        df = df.resample('4h').agg(agg_dict)
+                        df.dropna(inplace=True)
+                        logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df.shape}")
                 except Exception as e:
                     logger.error(f"[Yahoo] Error resampling to 4h: {str(e)}")
+                    # Continue with 1h data if resampling fails
             
             # Limit the number of candles
             if len(df) > limit:
