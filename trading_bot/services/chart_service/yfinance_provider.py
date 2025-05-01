@@ -82,19 +82,28 @@ class YahooFinanceProvider:
         Returns:
             tuple: Corrected (start_date, end_date)
         """
-        current_date = datetime.now()
+        # CRITICAL FIX: Always use current date (now) as reference point
+        # Get current date with time set to midnight for consistent comparison
+        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # If end_date is in the future, set it to current date
-        if end_date > current_date:
-            logger.warning(f"[Yahoo] End date {end_date} is in the future. Setting to current date.")
-            end_date = current_date
+        # Log original dates for debugging
+        logger.info(f"[Yahoo] Original dates: start={start_date.strftime('%Y-%m-%d')} end={end_date.strftime('%Y-%m-%d')}")
+        logger.info(f"[Yahoo] Current date: {current_date.strftime('%Y-%m-%d')}")
+        
+        # If end_date is in the future, set it to yesterday
+        if end_date >= current_date:
+            logger.warning(f"[Yahoo] End date {end_date.strftime('%Y-%m-%d')} is in the future or today. Setting to yesterday.")
+            end_date = current_date - timedelta(days=1)
             
-        # If start_date is in the future or after end_date, fix it
-        if start_date > current_date or start_date > end_date:
+        # If start_date is in the future or after/equal to end_date, fix it
+        if start_date >= current_date or start_date >= end_date:
             # Set start_date to 30 days before end_date
-            logger.warning(f"[Yahoo] Start date {start_date} is invalid. Setting to 30 days before end date.")
+            logger.warning(f"[Yahoo] Start date {start_date.strftime('%Y-%m-%d')} is invalid. Setting to 30 days before end date.")
             start_date = end_date - timedelta(days=30)
-            
+        
+        # Make sure dates are in correct format
+        logger.info(f"[Yahoo] Corrected date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        
         return start_date, end_date
 
     @staticmethod
@@ -231,11 +240,16 @@ class YahooFinanceProvider:
             wait_time = YahooFinanceProvider._min_delay_between_calls - time_since_last_call
             logger.info(f"[Yahoo] Rate limit: waiting for {wait_time:.2f} seconds before next call.")
             await asyncio.sleep(wait_time)
+        
+        # IMPORTANT: Increase the delay for next API call to avoid rate limiting
+        YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 0.5, 15)
+        logger.info(f"[Yahoo] Increased minimum delay to {YahooFinanceProvider._min_delay_between_calls:.2f} seconds")
+        
         # Update last call time *after* waiting/checking
         YahooFinanceProvider._last_api_call = time.time()
         
         # Add a small random delay to avoid synchronized requests
-        jitter = random.uniform(0.5, 2.0)
+        jitter = random.uniform(1.0, 3.0)  # Increased jitter
         await asyncio.sleep(jitter)
         logger.info(f"[Yahoo] Added jitter delay of {jitter:.2f} seconds.")
 
@@ -255,8 +269,12 @@ class YahooFinanceProvider:
         loop = asyncio.get_event_loop()
         yf_symbol = YahooFinanceProvider._format_symbol(symbol)
         
-        # Fix dates to ensure they're not in the future
-        start_date, end_date = YahooFinanceProvider._fix_future_dates(start_date, end_date)
+        # Force dates to be in the past to avoid future date issues
+        # Create fresh copies to avoid reference issues
+        start_date, end_date = YahooFinanceProvider._fix_future_dates(
+            start_date.replace(hour=0, minute=0, second=0, microsecond=0),
+            end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
         
         # DISABLE CIRCUIT BREAKER CHECK: Always try to get real data
         # We don't check circuit breaker status here anymore so it will always attempt
@@ -264,7 +282,7 @@ class YahooFinanceProvider:
         session = YahooFinanceProvider._get_session() # Get session once
         
         logger.info(f"[Yahoo] Preparing download for {symbol} ({yf_symbol}) on {interval} timeframe")
-        logger.info(f"[Yahoo] Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        logger.info(f"[Yahoo] Final date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
         # Inner synchronous function to run in executor
         # It includes the logic for both download and ticker.history
@@ -318,8 +336,8 @@ class YahooFinanceProvider:
                     time.sleep(1.5)
                     
                     df = ticker.history(
-                        start=start_date,
-                        end=end_date,
+                        start=start_date.date(),  # Use date() to ensure correct format
+                        end=end_date.date(),      # Use date() to ensure correct format
                         interval=interval,
                         prepost=False,
                         auto_adjust=False,
@@ -884,6 +902,9 @@ class YahooFinanceProvider:
                 
                 # If we get here, all tickers failed
                 logger.error(f"[Yahoo] All ticker options failed for {symbol}")
+                
+                # IMPORTANT: Return None instead of fallback data - we want real data or nothing
+                logger.info(f"[Yahoo] No fallback data used for {symbol} - we require real data")
                 return None
             
             # NO FALLBACK: Reset circuit breaker for this symbol to always retry
@@ -930,8 +951,9 @@ class YahooFinanceProvider:
             else:
                 interval = "1d"  # Default to daily
             
-            # Calculate start and end dates based on the requested timeframe and limit
-            end_date = datetime.now()
+            # CRITICAL FIX: Always use today and past dates, never future dates
+            # Use current date (now) as reference, not a static date
+            end_date = datetime.now() - timedelta(days=1)  # Yesterday
             
             # For 4h timeframe, we need to fetch more 1h candles
             multiplier = 4 if timeframe == "4h" else 1
@@ -943,22 +965,22 @@ class YahooFinanceProvider:
             if interval == "1m":
                 # Yahoo only provides 7 days of 1m data
                 days_to_fetch = min(7, limit * multiplier / 24 / 60)
-                start_date = end_date - timedelta(days=days_to_fetch)
+                start_date = end_date - timedelta(days=int(days_to_fetch) + 1)
             elif interval == "5m":
                 # Yahoo provides 60 days of 5m data
                 days_to_fetch = min(60, limit * multiplier * 5 / 24 / 60)
-                start_date = end_date - timedelta(days=days_to_fetch)
+                start_date = end_date - timedelta(days=int(days_to_fetch) + 1)
             elif interval == "15m":
                 # Yahoo provides 60 days of 15m data
                 days_to_fetch = min(60, limit * multiplier * 15 / 24 / 60)
-                start_date = end_date - timedelta(days=days_to_fetch)
+                start_date = end_date - timedelta(days=int(days_to_fetch) + 1)
             elif interval == "30m":
                 # Yahoo provides 60 days of 30m data
                 days_to_fetch = min(60, limit * multiplier * 30 / 24 / 60)
-                start_date = end_date - timedelta(days=days_to_fetch)
+                start_date = end_date - timedelta(days=int(days_to_fetch) + 1)
             elif interval == "1h":
                 # Get enough days based on limit and possibly 4h timeframe
-                days_to_fetch = (limit + extra_periods) * multiplier / 24
+                days_to_fetch = int((limit + extra_periods) * multiplier / 24)
                 start_date = end_date - timedelta(days=days_to_fetch + 10)  # Add some buffer
             elif interval == "1d":
                 # For daily data, simply get enough days
@@ -968,23 +990,32 @@ class YahooFinanceProvider:
                 # Default fallback
                 start_date = end_date - timedelta(days=365)
             
-            logger.info(f"[Yahoo] Requesting data for {formatted_symbol} from {start_date} to {end_date} with interval {interval}")
+            # Make sure we're using correct timezone-aware objects and dates in the past
+            start_date = start_date.replace(tzinfo=None)
+            end_date = end_date.replace(tzinfo=None)
             
-            # Avoid requesting data in the future
-            now = datetime.now()
-            start_date = min(start_date, now - timedelta(days=1))
-            end_date = min(end_date, now)
+            # Force correct formatting of dates for API calls
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            end_date_str = end_date.strftime('%Y-%m-%d')
+            
+            logger.info(f"[Yahoo] Requesting data for {formatted_symbol} from {start_date_str} to {end_date_str} with interval {interval}")
             
             # INCREASED MAX RETRIES FOR DOWNLOAD: Never give up, keep trying to get real data
             success = False
-            max_attempts = 5  # Reduced from 10 to 5 attempts per ticker since we now try multiple tickers
+            max_attempts = 3  # Reduced to prevent rate limiting
             attempt = 0
             df = None
             
             while not success and attempt < max_attempts:
                 attempt += 1
                 try:
-                    # Wait for rate limit
+                    # Double the wait time between attempts
+                    if attempt > 1:
+                        backoff_seconds = (attempt - 1) * 10  # 10, 20 seconds
+                        logger.info(f"[Yahoo] Backing off for {backoff_seconds} seconds before retry...")
+                        await asyncio.sleep(backoff_seconds)
+                    
+                    # Wait for rate limit - increased wait time
                     await YahooFinanceProvider._wait_for_rate_limit()
                     
                     # Download the data from Yahoo Finance
@@ -1000,21 +1031,20 @@ class YahooFinanceProvider:
                     if df is not None and not df.empty:
                         logger.info(f"[Yahoo] Successfully downloaded data for {original_symbol} with shape {df.shape}")
                         success = True
+                        
+                        # Reset the min delay on success to prevent continuous increasing
+                        YahooFinanceProvider._min_delay_between_calls = max(5, YahooFinanceProvider._min_delay_between_calls - 1)
                     else:
                         logger.warning(f"[Yahoo] Attempt {attempt}/{max_attempts}: No data returned for {original_symbol} ({formatted_symbol})")
                         
-                        # Increase delay between attempts
-                        backoff_seconds = attempt * 5  # 5, 10, 15, ... seconds
-                        logger.info(f"[Yahoo] Backing off for {backoff_seconds} seconds before retry...")
-                        await asyncio.sleep(backoff_seconds)
+                        # Increase minimum delay between calls to avoid rate limiting
+                        YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 2, 20)
                         
                 except Exception as e:
                     logger.error(f"[Yahoo] Attempt {attempt}/{max_attempts}: Error downloading data for {original_symbol}: {str(e)}")
                     
-                    # Increase delay between attempts
-                    backoff_seconds = attempt * 5  # 5, 10, 15, ... seconds
-                    logger.info(f"[Yahoo] Backing off for {backoff_seconds} seconds before retry...")
-                    await asyncio.sleep(backoff_seconds)
+                    # Increase minimum delay even more on error
+                    YahooFinanceProvider._min_delay_between_calls = min(YahooFinanceProvider._min_delay_between_calls + 3, 30)
             
             # After all attempts, if we still don't have data, we have to return None
             if df is None or df.empty:
@@ -1028,7 +1058,7 @@ class YahooFinanceProvider:
             if timeframe == "4h":
                 logger.info(f"[Yahoo] Resampling 1h data to 4h for {original_symbol}")
                 try:
-                    # Resample to 4h
+                    # Resample to 4h - fixed deprecated 'H' to 'h'
                     df = df.resample('4h').agg({
                         'Open': 'first',
                         'High': 'max',
@@ -1043,7 +1073,9 @@ class YahooFinanceProvider:
                     # Continue with 1h data if resampling fails
             
             # Limit the number of candles
-            df = df.iloc[-limit:]
+            if len(df) > limit:
+                df = df.iloc[-limit:]
+                logger.info(f"[Yahoo] Limited data to {limit} candles, final shape: {df.shape}")
             
             # Calculate indicators and return as a special object
             result = pd.DataFrame(df)
