@@ -630,21 +630,18 @@ class ChartService:
             market_type = await self._detect_market_type(instrument)
             logger.info(f"Detected market type: {market_type} for {instrument}")
             
-            # Use appropriate providers based on market type
+            # Eerst proberen cryptocurrency price via Binance, als het een crypto-instrument is
             if market_type == 'crypto':
-                # For crypto, we prefer to use the Binance provider
-                logger.info(f"Using Binance provider for crypto instrument {instrument}")
+                logger.info(f"Attempting to get data for crypto instrument {instrument} from Binance")
+                
                 for provider in self.chart_providers:
                     if isinstance(provider, BinanceProvider):
                         try:
-                            # Most crypto charts will be analyzed via the price data from Binance
-                            logger.info(f"Getting analysis from Binance for {instrument}")
-                            # NOTE: BinanceProvider uses get_market_data, not get_price_data
+                            logger.info(f"Using BinanceProvider for {instrument}")
                             result = await provider.get_market_data(instrument, timeframe)
                             
                             if result is not None:
                                 logger.info(f"Successfully got data from Binance for {instrument}")
-                                # BinanceProvider returns a named tuple with 'indicators'
                                 analysis = await self._analyze_market_data(instrument, timeframe, result.indicators, market_type)
                                 
                                 # Cache the analysis
@@ -673,7 +670,7 @@ class ChartService:
                 if market_type == 'commodity' and not isinstance(provider, YahooFinanceProvider):
                     logger.info(f"Skipping non-Yahoo provider for commodity {instrument}")
                     continue
-                
+                     
                 try:
                     logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                     
