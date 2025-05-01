@@ -792,16 +792,12 @@ class ChartService:
         if successful_provider is None and market_type == "commodity":
             logger.info(f"All providers failed for commodity {instrument}, using commodity-specific methods")
             try:
-                # Check if this is oil-related
-                if instrument in ["XTIUSD", "WTIUSD", "USOIL"]:
-                    logger.info(f"Using specialized oil price fallback for {instrument}")
-                    current_price = await self._fetch_oil_price_fallback(instrument)
-                else:
-                    # Get price from our specialized commodity method
-                    current_price = await self._fetch_commodity_price(instrument)
+                # Always use Yahoo Finance method for all commodities, including oil-related
+                logger.info(f"Using Yahoo Finance for commodity {instrument}")
+                current_price = await self._fetch_commodity_price(instrument)
                 
                 if current_price:
-                    logger.info(f"Got commodity price {current_price} for {instrument}")
+                    logger.info(f"Got commodity price {current_price} for {instrument} from Yahoo Finance")
                     
                     # Create a basic dataset with the current price and some reasonable indicators
                     base_price = current_price
@@ -2103,32 +2099,27 @@ class ChartService:
 
     async def _fetch_alternative_oil_price(self, symbol: str) -> Optional[float]:
         """
-        Try alternative APIs to get real oil price when Yahoo Finance fails.
-        Falls back to estimated price only as a last resort.
+        Always uses Yahoo Finance for oil prices instead of alternative APIs.
         
         Args:
             symbol: Oil symbol (XTIUSD, WTIUSD, USOIL)
             
         Returns:
-            float: Oil price or fallback value if all methods fail
+            float: Oil price from Yahoo Finance or None if it fails
         """
         try:
-            logger.info(f"Fetching oil price from alternative sources for {symbol}")
+            logger.info(f"Getting oil price from Yahoo Finance for {symbol}")
             
-            # Use our dedicated oil price API
-            from .oil_api import OilPriceAPI
+            # Always use Yahoo Finance for oil prices
+            yahoo_price = await self._fetch_commodity_price(symbol)
             
-            # Get real price from our API that tries multiple sources
-            real_price = await OilPriceAPI.get_wti_price()
-            
-            # If we got a real price from any alternative source, return it
-            if real_price is not None:
-                logger.info(f"Got real oil price from alternative source: ${real_price:.2f}")
-                return real_price
+            # If we got a price from Yahoo Finance, return it
+            if yahoo_price is not None:
+                logger.info(f"Got oil price from Yahoo Finance: ${yahoo_price:.2f}")
+                return yahoo_price
                 
-            # If all alternative sources fail, use best available estimate
-            # Current WTI Crude Oil price (updated May 2024)
-            logger.warning(f"All alternative sources failed for {symbol}, using estimated price")
+            # Only if Yahoo Finance completely fails, use estimate
+            logger.warning(f"Yahoo Finance failed for {symbol}, using estimated price")
             default_oil_price = 81.80  # Updated to recent WTI Crude Oil price ~$81-82 range
             
             # Add realistic variation
@@ -2140,21 +2131,22 @@ class ChartService:
             return price
             
         except Exception as e:
-            logger.error(f"Error in alternative oil price method: {str(e)}")
+            logger.error(f"Error getting oil price from Yahoo Finance: {str(e)}")
             return 81.50  # Return updated base price if even the fallback fails
             
     async def _fetch_oil_price_fallback(self, symbol: str) -> Optional[float]:
         """
-        Fallback method to get oil price when all real data sources fail.
+        Fallback method to get oil price that always uses Yahoo Finance.
         
         Args:
             symbol: Oil symbol (XTIUSD, WTIUSD, USOIL)
             
         Returns:
-            float: Oil price or None if all methods fail
+            float: Oil price from Yahoo Finance or None if it fails
         """
-        # Redirect to the more comprehensive alternative method
-        return await self._fetch_alternative_oil_price(symbol)
+        # Directly use Yahoo Finance via the commodity price method
+        logger.info(f"Getting oil price from Yahoo Finance via commodity method for {symbol}")
+        return await self._fetch_commodity_price(symbol)
 
     async def _fetch_index_price(self, symbol: str) -> Optional[float]:
         """
