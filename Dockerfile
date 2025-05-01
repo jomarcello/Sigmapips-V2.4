@@ -101,6 +101,9 @@ RUN apt-get update && apt-get install -y \
 # Installeer yfinance expliciet
 RUN pip install yfinance==0.2.57
 
+# Installeer cachetools expliciet (nodig voor YahooFinanceProvider)
+RUN pip install cachetools>=5.5.0
+
 # Installeer alle Python dependencies
 RUN pip install -r requirements.txt
 
