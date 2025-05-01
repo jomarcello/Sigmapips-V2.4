@@ -99,7 +99,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Installeer yfinance expliciet
-RUN pip install yfinance==0.2.36
+RUN pip install yfinance==0.2.57
 
 # Installeer alle Python dependencies
 RUN pip install -r requirements.txt
