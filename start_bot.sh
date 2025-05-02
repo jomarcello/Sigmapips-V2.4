@@ -12,13 +12,21 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Controleer Python versie (moet 3.8+ zijn)
+# Controleer Python versie op een eenvoudigere manier
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-if [ $(echo "$PYTHON_VERSION < 3.8" | bc) -eq 1 ]; then
+PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+
+# Directe vergelijking met integers (eenvoudiger en betrouwbaarder)
+if [ $PYTHON_MAJOR -lt 3 ]; then
+    echo "ERROR: Python versie te oud. SigmaPips vereist Python 3.8 of hoger."
+    exit 1
+elif [ $PYTHON_MAJOR -eq 3 ] && [ $PYTHON_MINOR -lt 8 ]; then
     echo "ERROR: Python $PYTHON_VERSION gedetecteerd. SigmaPips vereist Python 3.8 of hoger."
     exit 1
 fi
 
+# Als we hier komen, is Python 3.8 of hoger
 echo "Python $PYTHON_VERSION gedetecteerd. Dit is compatibel."
 
 # Controleer of venv module beschikbaar is
