@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Installeer Git
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
 # Installeer Chrome en benodigde dependencies
 RUN apt-get update && apt-get install -y \
     wget \
@@ -91,6 +94,15 @@ RUN apt-get update && apt-get install -y \
 
 # Werkdirectory instellen
 WORKDIR /app
+
+# Controleer of we een Git repository hebben
+COPY .git* ./
+RUN if [ -d ".git" ]; then \
+      git config --global --add safe.directory /app && \
+      git pull; \
+    else \
+      echo "No .git directory found, skipping git pull"; \
+    fi
 
 # Kopieer alleen requirements.txt
 COPY requirements.txt .
