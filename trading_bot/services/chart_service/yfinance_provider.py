@@ -148,6 +148,31 @@ class YahooFinanceProvider:
     async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 30, original_symbol: str = None, period: str = None) -> pd.DataFrame:
         """Download data using yfinance with retry logic and caching."""
         # --- Caching Logic ---
+        # Fix for future date cache keys - always check and sanitize the cache key
+        def sanitize_cache_key(key):
+            """Ensure cache key doesn't contain future dates"""
+            if not isinstance(key, tuple) or len(key) < 3:
+                return key
+                
+            # Check the third element for date strings
+            date_part = key[2]
+            if isinstance(date_part, str) and date_part.startswith("202"):
+                try:
+                    # Special check for 2025 and beyond
+                    if date_part.startswith("2025") or date_part > "2024-12-31":
+                        logger.warning(f"[Yahoo] Detected future date in cache key: {date_part}")
+                        # Replace with current date
+                        import time
+                        t = time.localtime()
+                        current_date = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+                        new_key = (key[0], key[1], current_date)
+                        logger.info(f"[Yahoo] Fixed cache key date: {date_part} -> {current_date}")
+                        return new_key
+                except Exception as e:
+                    logger.error(f"[Yahoo] Error sanitizing cache key: {e}")
+            
+            return key
+        
         # Cache key should ideally represent the actual request made
         if period:
             # Use period and interval for intraday caching
@@ -158,10 +183,31 @@ class YahooFinanceProvider:
         else:
             # Fallback cache key if parameters are weird (should not happen often)
             logger.warning("Could not determine proper cache key, using fallback.")
-            # Use current date (not future date) to avoid cache issues
-            current_date = datetime.now().strftime('%Y-%m-%d')
+            # Fix for future date issue - ensure we're using a valid current date
+            try:
+                current_date = datetime.now().strftime('%Y-%m-%d')
+                # Verify the date isn't in the future (check year specifically)
+                current_year = datetime.now().year
+                date_parts = current_date.split('-')
+                year = int(date_parts[0])
+                
+                # If year is in the future, use hardcoded current date
+                if year > current_year or year > 2024:  # 2024 as a safety check
+                    logger.warning(f"[Yahoo] Detected future year in date: {current_date}, forcing correction")
+                    import time
+                    # Use time.localtime() as an alternative source of current date
+                    t = time.localtime()
+                    current_date = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+                    logger.info(f"[Yahoo] Corrected to actual current date: {current_date}")
+            except Exception as date_e:
+                logger.error(f"[Yahoo] Error handling date correction: {date_e}")
+                # Fallback to hardcoded date if all else fails
+                current_date = "2024-05-02"  # Use a reasonable default
+                
             cache_key = (symbol, interval, current_date)
             logger.info(f"[Yahoo] Using fallback cache key with current date: {current_date}")
+
+        cache_key = sanitize_cache_key(cache_key)
 
         if cache_key in data_download_cache:
             logger.info(f"[Yahoo Cache] HIT for download: Key={cache_key}")
@@ -198,6 +244,24 @@ class YahooFinanceProvider:
                 if period:
                      download_kwargs['period'] = period
                 else:
+                     # Verify start and end dates are reasonable
+                     now = datetime.now()
+                     
+                     # Make sure end_date is not in the future
+                     if end_date > now:
+                         logger.warning(f"[Yahoo] End date {end_date.date()} is in the future, using current date instead")
+                         end_date = now
+                         
+                     # Make sure start_date is not in the future and is before end_date
+                     if start_date and (start_date > now or start_date > end_date):
+                         logger.warning(f"[Yahoo] Start date {start_date.date()} is invalid, adjusting as needed")
+                         if start_date > now:
+                             # Start date in future, use 30 days ago as fallback
+                             start_date = now - timedelta(days=30)
+                         if start_date > end_date:
+                             # Start date after end date, use 30 days before end date
+                             start_date = end_date - timedelta(days=30)
+                     
                      download_kwargs['start'] = start_date
                      download_kwargs['end'] = end_date
 
@@ -563,11 +627,64 @@ class YahooFinanceProvider:
         Fetches market data from Yahoo Finance for a FIXED timeframe (H1), validates it, and calculates indicators.
         Returns a tuple: (DataFrame with indicators, analysis_info dictionary)
         """
+        # Verify system date to detect any anomalies early
+        try:
+            import time
+            sys_time = time.localtime()
+            py_time = datetime.now()
+            
+            # Check for significant date discrepancies
+            if py_time.year != sys_time.tm_year or abs(py_time.year - 2024) > 1:
+                logger.warning(f"[Yahoo] ⚠️ SUSPICIOUS DATE DETECTED ⚠️")
+                logger.warning(f"[Yahoo] System date: {sys_time.tm_year}-{sys_time.tm_mon:02d}-{sys_time.tm_mday:02d}")
+                logger.warning(f"[Yahoo] Python date: {py_time.year}-{py_time.month:02d}-{py_time.day:02d}")
+                
+                # Use system time as the source of truth for safety
+                if sys_time.tm_year >= 2023 and sys_time.tm_year <= 2024:
+                    logger.warning(f"[Yahoo] Using system date as reliable source")
+                else:
+                    logger.error(f"[Yahoo] Both date sources may be unreliable!")
+        except Exception as date_check_e:
+            logger.error(f"[Yahoo] Error checking system date: {date_check_e}")
+            
         # <<< FIXED TIMEFRAME >>>
         fixed_timeframe = "H1" 
         # <<< END FIXED TIMEFRAME >>>
 
         cache_key = (symbol, fixed_timeframe, limit) # Use fixed_timeframe in cache key
+        
+        # Sanitize cache key to prevent future dates
+        def sanitize_cache_key(key):
+            """Ensure cache key doesn't contain future dates"""
+            if not isinstance(key, tuple) or len(key) < 3:
+                return key
+                
+            # Check if any element has a future date string
+            for elem in key:
+                if isinstance(elem, str) and elem.startswith("202"):
+                    try:
+                        # Special check for 2025 and beyond
+                        if elem.startswith("2025") or elem > "2024-12-31":
+                            logger.warning(f"[Yahoo] Detected future date in market cache key: {elem}")
+                            # Replace with current date
+                            import time
+                            t = time.localtime()
+                            current_date = f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+                            # Create new key with all elements (just in case)
+                            if len(key) == 3 and isinstance(key[2], str) and key[2].startswith("202"):
+                                new_key = (key[0], key[1], current_date)
+                            else:
+                                # Just return original if we're not sure how to fix
+                                new_key = key
+                            logger.info(f"[Yahoo] Fixed market cache key date")
+                            return new_key
+                    except Exception as e:
+                        logger.error(f"[Yahoo] Error sanitizing market cache key: {e}")
+            
+            return key
+            
+        cache_key = sanitize_cache_key(cache_key)
+
         if cache_key in market_data_cache:
             logger.info(f"[Yahoo Cache] HIT for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
             cached_result = market_data_cache[cache_key]
@@ -616,6 +733,19 @@ class YahooFinanceProvider:
                 # Calculate period string (e.g., '729d' for 1h to stay within limit)
                 yf_period = YahooFinanceProvider._calculate_period_for_interval(yf_interval, limit)
                 logger.info(f"[Yahoo] Using period='{yf_period}' for interval '{yf_interval}'")
+                
+                # Double check and sanitize period
+                if isinstance(yf_period, str) and 'd' in yf_period:
+                    try:
+                        # Extract number of days
+                        days = int(yf_period.replace('d', ''))
+                        # Cap at reasonable limit to prevent unusually large requests
+                        if days > 730:  # About 2 years
+                            logger.warning(f"[Yahoo] Period days too large: {days}, capping at 730 days")
+                            yf_period = "730d"
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"[Yahoo] Error parsing period days: {e}, using default '7d'")
+                        yf_period = "7d"
             elif yf_interval: # For daily or longer, use start/end date
                 approx_days_str = YahooFinanceProvider._calculate_period_for_interval(yf_interval, limit) # Use helper to get approx days needed
                 try:
