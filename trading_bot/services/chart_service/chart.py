@@ -144,157 +144,133 @@ class ChartService:
         start_time = time.time()
         logger.info(f"🔍 [CHART FLOW START] Getting chart for {instrument} with timeframe {timeframe}")
         
-        # Controleren of we echte data moeten forceren
-        prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
-        
-        # Controleer of de service is geïnitialiseerd
-        if not hasattr(self, 'chart_providers') or not self.chart_providers:
-            logger.error("Chart service not initialized")
-            return b''
-
-        # Normaliseer het instrument
-        orig_instrument = instrument
-        instrument = self._normalize_instrument_name(instrument)
-        logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
-
-        # Controleer of we een TradingView URL hebben voor dit instrument
-        logger.info(f"⚠️ Getting TradingView URL for {instrument}...")
-        tradingview_url = self.get_tradingview_url(instrument, timeframe)
-        if tradingview_url:
-            logger.info(f"✅ Found TradingView URL for {instrument}: {tradingview_url}")
+        try:
+            # Controleren of we echte data moeten forceren
+            prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
             
-            # EXTRA DEBUG: Print URL components
-            url_parts = tradingview_url.split('?')
-            if len(url_parts) > 1:
-                base_url = url_parts[0]
-                params = url_parts[1].split('&') if len(url_parts) > 1 else []
-                logger.info(f"🔍 URL Base: {base_url}")
-                logger.info(f"🔍 URL Params: {params}")
-                
-                # Verify session param exists
-                has_session = any(p.startswith('session=') for p in params)
-                logger.info(f"🔍 Has session param: {has_session}")
-                
-                if not has_session:
-                    logger.warning(f"❌ URL is missing session parameter! This may cause authentication issues.")
+            # Controleer of de service is geïnitialiseerd
+            if not hasattr(self, 'chart_providers') or not self.chart_providers:
+                logger.error("Chart service not initialized")
+                return b''
+
+            # Normaliseer het instrument
+            orig_instrument = instrument
+            instrument = self._normalize_instrument_name(instrument)
+            logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
+
+            # Controleer het soort markt
+            market_type = await self._detect_market_type(instrument)
             
-            # Direct call the internal Playwright method if URL exists
-            logger.info(f"🖥️ Attempting TradingView screenshot via Playwright for {instrument}")
-            logger.info(f"🚨 Calling _capture_tradingview_screenshot with URL: {tradingview_url}") # Added this log line
-            screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
-            if screenshot:
-                # Add explicit size check
-                size_kb = len(screenshot) / 1024
-                logger.info(f"✅ Successfully captured tradingview screenshot for {instrument} (Size: {size_kb:.2f} KB)")
-                if size_kb < 5:
-                    logger.warning(f"⚠️ Screenshot is suspiciously small ({size_kb:.2f} KB). This may indicate a blank or error page.")
-                return screenshot
+            # Stel de cache key in
+            cache_key = f"{instrument}_{timeframe}"
+
+            # Controleer of we een TradingView URL hebben voor dit instrument
+            logger.info(f"⚠️ Getting TradingView URL for {instrument}...")
+            tradingview_url = self.get_tradingview_url(instrument, timeframe)
+            if tradingview_url:
+                logger.info(f"✅ Found TradingView URL for {instrument}: {tradingview_url}")
+                
+                # EXTRA DEBUG: Print URL components
+                url_parts = tradingview_url.split('?')
+                if len(url_parts) > 1:
+                    base_url = url_parts[0]
+                    params = url_parts[1].split('&') if len(url_parts) > 1 else []
+                    logger.info(f"🔍 URL Base: {base_url}")
+                    logger.info(f"🔍 URL Params: {params}")
+                    
+                    # Verify session param exists
+                    has_session = any(p.startswith('session=') for p in params)
+                    logger.info(f"🔍 Has session param: {has_session}")
+                    
+                    if not has_session:
+                        logger.warning(f"❌ URL is missing session parameter! This may cause authentication issues.")
+                
+                # Direct call the internal Playwright method if URL exists
+                logger.info(f"🖥️ Attempting TradingView screenshot via Playwright for {instrument}")
+                logger.info(f"🚨 Calling _capture_tradingview_screenshot with URL: {tradingview_url}") # Added this log line
+                screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
+                if screenshot:
+                    # Add explicit size check
+                    size_kb = len(screenshot) / 1024
+                    logger.info(f"✅ Successfully captured tradingview screenshot for {instrument} (Size: {size_kb:.2f} KB)")
+                    if size_kb < 5:
+                        logger.warning(f"⚠️ Screenshot is suspiciously small ({size_kb:.2f} KB). This may indicate a blank or error page.")
+                    return screenshot
+                else:
+                    logger.error(f"❌ Failed to capture tradingview screenshot for {instrument}")
             else:
-                logger.error(f"❌ Failed to capture tradingview screenshot for {instrument}")
-        else:
-            logger.warning(f"❌ No TradingView URL found for {instrument}")
+                logger.warning(f"❌ No TradingView URL found for {instrument}")
 
-        # Probeer een chart te genereren met behulp van resterende providers
-        logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
-        
-        # Prioriteit geven aan Direct Yahoo Finance voor echte data
-        direct_yahoo_provider = None
-        for provider in self.chart_providers:
-            if isinstance(provider, DirectYahooProvider):
-                direct_yahoo_provider = provider
-                break
-                
-        if direct_yahoo_provider:
-            try:
-                logger.info(f"Prioritizing DirectYahooProvider for real chart data for {instrument}")
+            # Probeer een chart te genereren met behulp van resterende providers
+            logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
+            
+            # Prioriteit geven aan Direct Yahoo Finance voor echte data
+            direct_yahoo_provider = None
+            for provider in self.chart_providers:
+                if isinstance(provider, DirectYahooProvider):
+                    direct_yahoo_provider = provider
+                    break
+                    
+            if direct_yahoo_provider:
                 try:
-                    # DirectYahooProvider.get_chart is een static method
-                    chart_bytes = DirectYahooProvider.get_chart(instrument, timeframe, fullscreen)
-                    if chart_bytes and len(chart_bytes) > 1000:  # Controleer of het een geldige afbeelding is
-                        logger.info(f"Successfully got REAL chart data from DirectYahooProvider for {instrument}")
-                        return chart_bytes
-                except Exception as yahoo_err:
-                    logger.error(f"Error getting chart from DirectYahooProvider: {str(yahoo_err)}")
-            except Exception as e:
-                logger.error(f"Error prioritizing DirectYahooProvider chart: {str(e)}")
-        
-        # Probeer alle andere providers
-        for provider in self.chart_providers:
-            try:
-                # Skip Binance for non-crypto instruments
-                if isinstance(provider, BinanceProvider) and market_type != 'crypto':
-                    logger.info(f"Skipping BinanceProvider for non-crypto instrument {instrument}")
-                    continue
-                
-                logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
-                
-                if hasattr(provider, "get_market_data"):
-                    if isinstance(provider, YahooFinanceProvider):
-                        # Provider has async methods but is used in a mix of async/non-async
-                        # Run the async method in the event loop directly
-                        try:
-                            loop = asyncio.get_event_loop()
-                            market_data, metadata = loop.run_until_complete(provider.get_market_data(instrument))
-                            if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
-                                if hasattr(self, '_generate_analysis_from_data'):
+                    logger.info(f"Prioritizing DirectYahooProvider for real chart data for {instrument}")
+                    try:
+                        # We proberen eerst met de DirectYahooProvider, die betere rate limiting heeft
+                        logger.info(f"Attempting to get data from DirectYahooProvider for {instrument}")
+                        
+                        # Direct met asyncio aanroepen in plaats van ThreadPoolExecutor
+                        for provider in self.chart_providers:
+                            if isinstance(provider, DirectYahooProvider):
+                                # Correct aanroepen met 'await'
+                                market_data, indicators = await provider.get_market_data(instrument, timeframe=timeframe)
+                                if market_data is not None and not market_data.empty:
+                                    logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
+                                    metadata = {"provider": "YahooFinance", "market_type": market_type}
                                     analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                    # Cache the result
+                                    # Cache de analyse
                                     self.analysis_cache[cache_key] = (time.time(), analysis)
                                     return analysis
-                        except RuntimeError as re:
-                            # Handle "cannot be called from a running event loop" error
-                            if "running event loop" in str(re):
-                                logger.warning(f"Detected running event loop issue with {provider.__class__.__name__}: {str(re)}")
-                                # Use a thread to run the operation instead
-                                try:
-                                    from concurrent.futures import ThreadPoolExecutor
-                                    with ThreadPoolExecutor() as executor:
-                                        future = asyncio.run_coroutine_threadsafe(
-                                            provider.get_market_data(instrument),
-                                            asyncio.get_event_loop()
-                                        )
-                                        market_data, metadata = future.result(timeout=30)  # 30s timeout
-                                        if market_data is not None and not market_data.empty:
-                                            logger.info(f"Successfully got market data with {provider.__class__.__name__} thread for {instrument}")
-                                            if hasattr(self, '_generate_analysis_from_data'):
-                                                analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                                # Cache the result
-                                                self.analysis_cache[cache_key] = (time.time(), analysis)
-                                                return analysis
-                                except Exception as thread_err:
-                                    logger.error(f"Thread execution error for {provider.__class__.__name__}: {str(thread_err)}")
-                            else:
-                                # Not a running event loop error, re-raise
-                                raise
-                    else:
-                        # For other non-Yahoo providers
-                        market_data, metadata = await provider.get_market_data(instrument)
-                        if market_data is not None and not market_data.empty:
-                            logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
-                            if hasattr(self, '_generate_analysis_from_data'):
+                                else:
+                                    logger.warning(f"No market data from DirectYahooProvider for {instrument}")
+                                    break
+                    except Exception as yahoo_err:
+                        logger.error(f"Error getting chart from DirectYahooProvider: {str(yahoo_err)}")
+                except Exception as e:
+                    logger.error(f"Error prioritizing DirectYahooProvider chart: {str(e)}")
+            
+            # Probeer YahooFinanceProvider als fallback
+            try:
+                for provider in self.chart_providers:
+                    try:
+                        if isinstance(provider, YahooFinanceProvider):
+                            logger.info(f"Trying YahooFinanceProvider as fallback for {instrument}")
+                            market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Successfully got market data from YahooFinance fallback for {instrument}")
+                                metadata = {"provider": "YahooFinance", "market_type": market_type}
                                 analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                # Cache the result
+                                # Cache de analyse
                                 self.analysis_cache[cache_key] = (time.time(), analysis)
                                 return analysis
-            except Exception as e:
-                error_type = type(e).__name__
-                logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
-                logger.error(f"Error type: {error_type}")
+                    except Exception as e:
+                        logger.error(f"Error using YahooFinanceProvider: {str(e)}")
+            except Exception as yahoo_error:
+                logger.error(f"Error trying YahooFinanceProvider as fallback: {str(yahoo_error)}")
                 
-                # Add stacktrace for debugging
-                if hasattr(e, '__traceback__'):
-                    logger.error(traceback.format_exc())
-
-        # Als alle providers zijn gefaald en de gebruiker echte data wil, gebruik dan geen fallback
-        if prefer_real_data:
-            logger.error(f"All chart providers failed for {instrument} and fallback is disabled")
-            # Return een lege byte string - de aanroeper moet dit controleren
-            return b''
-        else:
-            # Probeer een fallback chart te genereren
-            logger.warning(f"All providers failed for {instrument}, using fallback chart")
-            return await self._generate_fallback_chart(instrument, timeframe)
+            # Als all providers hebben gefaald, genereer dan default analysis
+            logger.warning(f"All providers failed for {instrument}, generating default analysis")
+            default_analysis = await self._generate_default_analysis(instrument, timeframe)
+            # Cache de analyse
+            self.analysis_cache[cache_key] = (time.time(), default_analysis)
+            return default_analysis
+                    
+        except Exception as e:
+            logger.error(f"Error in get_chart: {str(e)}")
+            logger.error(traceback.format_exc())
+            return f"Error getting chart for {instrument}: {str(e)}"
+        finally:
+            elapsed_time = time.time() - start_time
+            logger.info(f"Chart for {instrument} completed in {elapsed_time:.2f} seconds")
 
     async def _create_emergency_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
         """Create an emergency simple chart when all else fails"""
@@ -779,31 +755,22 @@ class ChartService:
             try:
                 # We proberen eerst met de DirectYahooProvider, die betere rate limiting heeft
                 logger.info(f"Attempting to get data from DirectYahooProvider for {instrument}")
-                import concurrent.futures
                 
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    # Definieer functie om DirectYahooProvider data op te halen
-                    def get_direct_yahoo_data():
-                        for provider in self.chart_providers:
-                            if isinstance(provider, DirectYahooProvider):
-                                market_data = provider.get_market_data(instrument, timeframe=timeframe)
-                                if market_data is not None and not market_data.empty:
-                                    metadata = {"provider": "YahooFinance", "market_type": market_type}
-                                    return market_data, metadata
-                        return None, None
-                    
-                    # Probeer DirectYahooProvider data op te halen
-                    market_data, metadata = executor.submit(get_direct_yahoo_data).result()
-                    
-                    if market_data is not None and not market_data.empty:
-                        logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
-                        analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                        # Cache de analyse
-                        self.analysis_cache[cache_key] = (time.time(), analysis)
-                        return analysis
-                    else:
-                        logger.warning(f"No market data from DirectYahooProvider for {instrument}")
-                        
+                # Direct met asyncio aanroepen in plaats van ThreadPoolExecutor
+                for provider in self.chart_providers:
+                    if isinstance(provider, DirectYahooProvider):
+                        # Correct aanroepen met 'await'
+                        market_data, indicators = await provider.get_market_data(instrument, timeframe=timeframe)
+                        if market_data is not None and not market_data.empty:
+                            logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
+                            metadata = {"provider": "YahooFinance", "market_type": market_type}
+                            analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                            # Cache de analyse
+                            self.analysis_cache[cache_key] = (time.time(), analysis)
+                            return analysis
+                        else:
+                            logger.warning(f"No market data from DirectYahooProvider for {instrument}")
+                            break
             except Exception as e:
                 logger.error(f"Error getting data from DirectYahooProvider: {str(e)}")
             
