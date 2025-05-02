@@ -1973,25 +1973,26 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
             )
             
     def _generate_mock_calendar_data(self, currencies, date):
-        """Returns a message indicating that mock data is not allowed"""
-        self.logger.warning(f"Mock calendar data requested but generation is disabled")
+        """
+        Vervangen door foutmelding in plaats van mock data te genereren.
+        """
+        logger.warning(f"Calendar data requested but no real data is available")
         
-        # In plaats van mock kalenderdata, geven we een lege dictionary terug
-        # en loggen we een waarschuwing
-        message = "⚠️ Geen kalendar data beschikbaar. Het systeem gebruikt geen fallback data."
+        error_event = {
+            "title": "⚠️ Geen kalender data beschikbaar",
+            "country": "Global",
+            "date": date.strftime("%Y-%m-%d"),
+            "time": "00:00",
+            "impact": "medium",
+            "forecast": "N/A",
+            "previous": "N/A",
+            "actual": "N/A",
+            "currency": currencies[0] if currencies else "ALL",
+            "description": "Het systeem gebruikt geen fallback data. Probeer later opnieuw wanneer de echte dataconnectie beschikbaar is."
+        }
         
-        # Leeg resultaat - hierdoor wordt de foutmelding getoond in plaats van nep-gegevens
-        mock_data = {}
-        
-        for currency in currencies:
-            # Voeg een event met foutmelding toe voor elke currency
-            mock_data[currency] = [{
-                "time": "00:00 EST",
-                "event": message,
-                "impact": "High"
-            }]
-        
-        return mock_data
+        # Stuur slechts één event terug met de foutmelding
+        return [error_event]
 
     async def back_to_signal_analysis_callback(self, update: Update, context=None) -> int:
         """Handle back_to_signal_analysis button press"""
