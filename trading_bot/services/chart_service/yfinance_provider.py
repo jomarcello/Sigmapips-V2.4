@@ -20,19 +20,47 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
-# Early validation of system date
-try:
+# Functie om een betrouwbare huidige datum te krijgen (voorkomt toekomstdatums)
+def get_valid_current_date():
+    """Get a valid current date, ensuring it's not in the future"""
     now = datetime.now()
-    # Check for suspicious future dates
+    # Controleer of de datum in een redelijk bereik is (niet in de toekomst)
     if now.year > 2024:
-        logger.warning(f"MODULE INIT: Detected suspicious system date: {now}")
-        # Set environment variable to override dates
-        os.environ["OVERRIDE_DATE"] = "2024-05-02"
-        logger.warning(f"MODULE INIT: Set override date to 2024-05-02")
-except Exception as e:
-    logger.error(f"MODULE INIT: Error checking system date: {e}")
-    # Set override date anyway as precaution
-    os.environ["OVERRIDE_DATE"] = "2024-05-02"
+        logger.warning(f"Datum lijkt in de toekomst te zijn: {now}. Gebruik alternatieve methode.")
+        
+        # Probeer alternatieve methoden voor het verkrijgen van de huidige datum
+        try:
+            # Methode 1: time.time() en conversie
+            current_time = time.time()
+            alt_now = datetime.fromtimestamp(current_time)
+            
+            if alt_now.year <= 2024:
+                logger.info(f"Alternatieve datum via time.time() lijkt geldig: {alt_now}")
+                return alt_now
+                
+            # Methode 2: time.localtime()
+            t = time.localtime()
+            if t.tm_year <= 2024:
+                alt_now = datetime(t.tm_year, t.tm_mon, t.tm_mday)
+                logger.info(f"Alternatieve datum via time.localtime() lijkt geldig: {alt_now}")
+                return alt_now
+                
+            # Alle methoden geven toekomstdatums
+            logger.warning("Alle datummethoden geven toekomstdatums, val terug op veilige datum")
+            # Gebruik een recente, maar veilige datum
+            return datetime(2024, 5, 3)
+            
+        except Exception as e:
+            logger.error(f"Fout bij het bepalen van alternatieve datum: {e}")
+            # Veilige fallback
+            return datetime(2024, 5, 3)
+    
+    # De datum lijkt geldig
+    return now
+
+# Early validation van systeemdatum
+current_date = get_valid_current_date()
+logger.info(f"Gevalideerde huidige datum voor Yahoo Finance requests: {current_date.strftime('%Y-%m-%d')}")
 
 # Configure retry mechanism
 # ... (retry decorator setup remains the same) ...
@@ -59,9 +87,6 @@ class YahooFinanceProvider:
     _429_count = 0
     _429_last_time = 0
     _max_429_count = 3  # Maximum number of 429 errors before extended backoff
-    
-    # Track unreliable system time
-    _unreliable_system_time = False
 
     @staticmethod
     def _get_session():
@@ -178,8 +203,9 @@ class YahooFinanceProvider:
                     # Special check for 2025 and beyond
                     if date_part.startswith("2025") or date_part > "2024-12-31":
                         logger.warning(f"[Yahoo] Detected future date in cache key: {date_part}")
-                        # Use a hardcoded current date
-                        current_date = "2024-05-02"  # Hardcoded reliable date
+                        # Use a dynamic current date
+                        current_dt = get_valid_current_date()
+                        current_date = current_dt.strftime('%Y-%m-%d')
                         new_key = (key[0], key[1], current_date)
                         logger.info(f"[Yahoo] Fixed cache key date: {date_part} -> {current_date}")
                         return new_key
@@ -198,23 +224,15 @@ class YahooFinanceProvider:
         else:
             # Fallback cache key if parameters are weird (should not happen often)
             logger.warning("Could not determine proper cache key, using fallback.")
-            # Fix for future date issue - ensure we're using a valid current date
+            # Gebruik een dynamische maar geldige huidige datum
             try:
-                current_date = datetime.now().strftime('%Y-%m-%d')
-                # Verify the date isn't in the future (check year specifically)
-                date_parts = current_date.split('-')
-                year = int(date_parts[0])
-                
-                # If year is in the future, use hardcoded date
-                if year > 2024:  # 2024 as a safety check
-                    logger.warning(f"[Yahoo] Detected future year in date: {current_date}, forcing hardcoded date")
-                    # Don't use time.localtime() as it might have the same issue
-                    current_date = "2024-05-02"  # Hardcode a reliable current date
-                    logger.info(f"[Yahoo] Using hardcoded reliable date: {current_date}")
+                current_dt = get_valid_current_date()
+                current_date = current_dt.strftime('%Y-%m-%d')
+                logger.info(f"[Yahoo] Dynamische huidige datum voor cache key: {current_date}")
             except Exception as date_e:
-                logger.error(f"[Yahoo] Error handling date correction: {date_e}")
-                # Fallback to hardcoded date if all else fails
-                current_date = "2024-05-02"  # Use a reasonable default
+                logger.error(f"[Yahoo] Error getting current date for cache key: {date_e}")
+                # Veilige fallback als alles mislukt
+                current_date = "2024-05-03"
                 
             cache_key = (symbol, interval, current_date)
             logger.info(f"[Yahoo] Using fallback cache key with current date: {current_date}")
@@ -258,27 +276,20 @@ class YahooFinanceProvider:
                 else:
                      # Ensure end_date and start_date are set
                      if 'end_date' not in locals() or end_date is None:
-                         end_date = datetime.now()
-                         logger.warning(f"[Yahoo] End date was not set, defaulting to now: {end_date.date()}")
+                         end_date = get_valid_current_date()
+                         logger.warning(f"[Yahoo] End date was not set, defaulting to current date: {end_date.date()}")
                      
                      if 'start_date' not in locals() or start_date is None:
                          start_date = end_date - timedelta(days=30)
                          logger.warning(f"[Yahoo] Start date was not set, defaulting to 30 days before end: {start_date.date()}")
                          
                      # Verify start and end dates are reasonable
-                     now = datetime.now()
-                     
-                     # Check for future dates
-                     if now.year > 2024:
-                         logger.warning(f"[Yahoo] Current datetime appears to be in the future: {now}")
-                         # Use hardcoded date instead
-                         now = datetime(2024, 5, 2)
-                         logger.info(f"[Yahoo] Using hardcoded current date: {now.date()}")
+                     now = get_valid_current_date()
                      
                      # Make sure end_date is not in the future
                      if end_date.year > 2024 or end_date > now:
-                         logger.warning(f"[Yahoo] End date {end_date.date()} appears invalid, using reliable date")
-                         end_date = datetime(2024, 5, 2)
+                         logger.warning(f"[Yahoo] End date {end_date.date()} appears invalid, using current date")
+                         end_date = now
                          
                      # Make sure start_date is not in the future and is before end_date
                      if start_date.year > 2024 or start_date > now or start_date > end_date:
@@ -653,31 +664,10 @@ class YahooFinanceProvider:
         """
         # Verify system date to detect any anomalies early
         try:
-            import time
-            sys_time = time.localtime()
-            py_time = datetime.now()
-            
-            # Check for significant date discrepancies
-            if py_time.year != sys_time.tm_year or py_time.year > 2024:
-                logger.warning(f"[Yahoo] ⚠️ SUSPICIOUS DATE DETECTED ⚠️")
-                logger.warning(f"[Yahoo] System date: {sys_time.tm_year}-{sys_time.tm_mon:02d}-{sys_time.tm_mday:02d}")
-                logger.warning(f"[Yahoo] Python date: {py_time.year}-{py_time.month:02d}-{py_time.day:02d}")
-                
-                # Both dates may be wrong, use hardcoded reliable date
-                logger.warning(f"[Yahoo] Using hardcoded reliable date (2024-05-02)")
-                
-                # Define a global variable to indicate unreliable system time
-                YahooFinanceProvider._unreliable_system_time = True
-                
-                # Use hardcoded date for all time-sensitive operations
-                os.environ["OVERRIDE_DATE"] = "2024-05-02"
-            else:
-                YahooFinanceProvider._unreliable_system_time = False
+            current_dt = get_valid_current_date()
+            logger.info(f"[Yahoo] Huidige gevalideerde datum voor request: {current_dt.strftime('%Y-%m-%d')}")
         except Exception as date_check_e:
-            logger.error(f"[Yahoo] Error checking system date: {date_check_e}")
-            # Assume unreliable just to be safe
-            YahooFinanceProvider._unreliable_system_time = True
-            os.environ["OVERRIDE_DATE"] = "2024-05-02"
+            logger.error(f"[Yahoo] Error validating current date: {date_check_e}")
             
         # <<< FIXED TIMEFRAME >>>
         fixed_timeframe = "H1" 
@@ -698,15 +688,16 @@ class YahooFinanceProvider:
                         # Special check for 2025 and beyond
                         if elem.startswith("2025") or elem > "2024-12-31":
                             logger.warning(f"[Yahoo] Detected future date in market cache key: {elem}")
-                            # Use a hardcoded current date
-                            current_date = "2024-05-02"  # Hardcoded reliable date
+                            # Dynamic current date
+                            current_dt = get_valid_current_date()
+                            current_date = current_dt.strftime('%Y-%m-%d')
                             # Create new key with all elements (just in case)
                             if len(key) == 3 and isinstance(key[2], str) and key[2].startswith("202"):
                                 new_key = (key[0], key[1], current_date)
                             else:
                                 # Just return original if we're not sure how to fix
                                 new_key = key
-                            logger.info(f"[Yahoo] Fixed market cache key date")
+                            logger.info(f"[Yahoo] Fixed market cache key date: {elem} -> {current_date}")
                             return new_key
                     except Exception as e:
                         logger.error(f"[Yahoo] Error sanitizing market cache key: {e}")
@@ -1201,21 +1192,5 @@ class YahooFinanceProvider:
 
     @staticmethod
     def _get_reliable_date():
-        """Get a reliable current date, using override if system date is unreliable"""
-        if YahooFinanceProvider._unreliable_system_time or os.environ.get("OVERRIDE_DATE"):
-            override_date = os.environ.get("OVERRIDE_DATE", "2024-05-02")
-            logger.info(f"[Yahoo] Using override date: {override_date}")
-            try:
-                # Parse date string to datetime
-                parts = override_date.split("-")
-                year = int(parts[0])
-                month = int(parts[1])
-                day = int(parts[2])
-                return datetime(year, month, day)
-            except Exception as e:
-                logger.error(f"[Yahoo] Error parsing override date: {e}")
-                # Fallback to hardcoded datetime
-                return datetime(2024, 5, 2)
-        else:
-            # Use the normal current date
-            return datetime.now()
+        """Krijg een betrouwbare huidige datum voor Yahoo Finance requests"""
+        return get_valid_current_date()
