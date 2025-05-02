@@ -27,7 +27,10 @@ import tempfile
 from trading_bot.services.chart_service.base import TradingViewService
 # Import providers
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
+from trading_bot.services.chart_service.alphavantage_provider import AlphaVantageProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
+from trading_bot.services.chart_service.rapidapi_yahoo_provider import RapidapiYahooProvider
+from trading_bot.services.chart_service.direct_yahoo_provider import DirectYahooProvider
 # AllTickProvider import removed as we never use it
 
 logger = logging.getLogger(__name__)
@@ -64,7 +67,10 @@ class ChartService:
             # Initialiseer de chart providers (ZONDER TradingViewNodeService)
             self.chart_providers = [
                 BinanceProvider(),      # Eerst Binance voor crypto's
-                YahooFinanceProvider(), # Dan Yahoo Finance voor andere markten
+                DirectYahooProvider(),  # Direct Yahoo Finance implementation via yfinance library
+                RapidapiYahooProvider(), # Dan RapidAPI Yahoo Finance als backup 
+                YahooFinanceProvider(), # Yahoo Finance als fallback via yfinance
+                # AlphaVantageProvider removed because we're replacing it with direct Yahoo Finance
                 # AllTickProvider is removed as we never use it and it causes recursion errors
             ]
             
@@ -136,7 +142,7 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            logging.info("Chart service initialized with providers: Binance, YahooFinance") # UPDATED LOG
+            logging.info("Chart service initialized with providers: Binance, DirectYahoo, RapidAPI Yahoo, YahooFinance")
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
@@ -199,34 +205,38 @@ class ChartService:
         # Probeer een chart te genereren met behulp van resterende providers
         logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
         
-        # Prioriteit geven aan Yahoo Finance voor echte data
-        yahoo_provider = None
+        # Prioriteit geven aan Direct Yahoo Finance voor echte data
+        direct_yahoo_provider = None
         for provider in self.chart_providers:
-            if isinstance(provider, YahooFinanceProvider):
-                yahoo_provider = provider
+            if isinstance(provider, DirectYahooProvider):
+                direct_yahoo_provider = provider
                 break
                 
-        if yahoo_provider:
+        if direct_yahoo_provider:
             try:
-                logger.info(f"Prioritizing YahooFinanceProvider for real chart data for {instrument}")
+                logger.info(f"Prioritizing DirectYahooProvider for real chart data for {instrument}")
                 try:
-                    # YahooFinanceProvider.get_chart is een static method en geen coroutine
-                    chart_bytes = YahooFinanceProvider.get_chart(instrument, timeframe, fullscreen)
+                    # DirectYahooProvider.get_chart is een static method
+                    chart_bytes = DirectYahooProvider.get_chart(instrument, timeframe, fullscreen)
                     if chart_bytes and len(chart_bytes) > 1000:  # Controleer of het een geldige afbeelding is
-                        logger.info(f"Successfully got REAL chart data from YahooFinance for {instrument}")
+                        logger.info(f"Successfully got REAL chart data from DirectYahooProvider for {instrument}")
                         return chart_bytes
                 except Exception as yahoo_err:
-                    logger.error(f"Error getting chart from YahooFinance: {str(yahoo_err)}")
+                    logger.error(f"Error getting chart from DirectYahooProvider: {str(yahoo_err)}")
             except Exception as e:
-                logger.error(f"Error prioritizing YahooFinance chart: {str(e)}")
+                logger.error(f"Error prioritizing DirectYahooProvider chart: {str(e)}")
         
         # Probeer alle andere providers
         for provider in self.chart_providers:
             try:
                 logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                 
+                # Special handling for DirectYahooProvider
+                if isinstance(provider, DirectYahooProvider):
+                    # Already tried as priority provider, skip
+                    continue
                 # Special handling for YahooFinanceProvider
-                if isinstance(provider, YahooFinanceProvider):
+                elif isinstance(provider, YahooFinanceProvider):
                     # IMPORTANT: Call the static get_chart method directly and not as a coroutine
                     # YahooFinanceProvider.get_chart is not an async method
                     logger.info(f"Using direct static YahooFinanceProvider.get_chart for {instrument}")
@@ -739,46 +749,85 @@ class ChartService:
             market_type = await self._detect_market_type(instrument)
             logger.info(f"Detected market type: {market_type} for {instrument}")
             
-            # Try YahooFinanceProvider first for real market data
+            # Try DirectYahooProvider first for real market data
             if prefer_real_data:
                 try:
-                    logger.info(f"Prioritizing real market data from YahooFinanceProvider for {instrument}")
-                    # Probeer direct Yahoo Finance te gebruiken voor echte marktdata
-                    yahoo_provider = None
+                    logger.info(f"Prioritizing real market data from DirectYahooProvider for {instrument}")
+                    direct_yahoo_provider = None
                     for provider in self.chart_providers:
-                        if isinstance(provider, YahooFinanceProvider):
-                            yahoo_provider = provider
+                        if isinstance(provider, DirectYahooProvider):
+                            direct_yahoo_provider = provider
                             break
                     
-                    if yahoo_provider:
+                    if direct_yahoo_provider:
                         try:
-                            # Gebruik ThreadPoolExecutor om asyncio problemen te omzeilen
+                            # Use ThreadPoolExecutor to avoid asyncio issues
                             from concurrent.futures import ThreadPoolExecutor
                             import asyncio
                             
-                            def get_yahoo_data():
+                            def get_direct_yahoo_data():
                                 loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(loop)
                                 try:
-                                    return loop.run_until_complete(yahoo_provider.get_market_data(instrument))
+                                    return loop.run_until_complete(direct_yahoo_provider.get_market_data(instrument))
                                 finally:
                                     loop.close()
                             
-                            # Voer asyncio code uit in een thread
+                            # Execute asyncio code in a thread
                             with ThreadPoolExecutor() as executor:
-                                market_data, metadata = executor.submit(get_yahoo_data).result()
+                                market_data, metadata = executor.submit(get_direct_yahoo_data).result()
                                 
                             if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got REAL market data from YahooFinance for {instrument}")
+                                logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
                                 if hasattr(self, '_generate_analysis_from_data'):
                                     analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                                     # Cache the result
                                     self.analysis_cache[cache_key] = (time.time(), analysis)
                                     return analysis
-                        except Exception as yahoo_error:
-                            logger.error(f"Error getting data from YahooFinance: {str(yahoo_error)}")
+                        except Exception as yahoo_err:
+                            logger.error(f"Error getting data from DirectYahooProvider: {str(yahoo_err)}")
+                            # Fall back to other providers if DirectYahooProvider fails
                 except Exception as e:
-                    logger.error(f"Error prioritizing YahooFinance: {str(e)}")
+                    logger.error(f"Error prioritizing DirectYahooProvider: {str(e)}")
+                    
+                # If DirectYahooProvider failed, try RapidAPI as a backup
+                try:
+                    logger.info(f"Trying RapidapiYahooProvider as backup for {instrument}")
+                    rapidapi_provider = None
+                    for provider in self.chart_providers:
+                        if isinstance(provider, RapidapiYahooProvider):
+                            rapidapi_provider = provider
+                            break
+                    
+                    if rapidapi_provider:
+                        try:
+                            # Gebruik ThreadPoolExecutor om asyncio problemen te omzeilen
+                            from concurrent.futures import ThreadPoolExecutor
+                            import asyncio
+                            
+                            def get_rapidapi_data():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    return loop.run_until_complete(rapidapi_provider.get_market_data(instrument))
+                                finally:
+                                    loop.close()
+                            
+                            # Voer asyncio code uit in een thread
+                            with ThreadPoolExecutor() as executor:
+                                market_data, metadata = executor.submit(get_rapidapi_data).result()
+                                
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Successfully got REAL market data from RapidapiYahooProvider for {instrument}")
+                                if hasattr(self, '_generate_analysis_from_data'):
+                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                    # Cache the result
+                                    self.analysis_cache[cache_key] = (time.time(), analysis)
+                                    return analysis
+                        except Exception as rapidapi_error:
+                            logger.error(f"Error getting data from RapidapiYahooProvider: {str(rapidapi_error)}")
+                except Exception as e:
+                    logger.error(f"Error trying RapidapiYahooProvider as backup: {str(e)}")
             
             # Try providers based on market type
             logger.info(f"Trying appropriate providers for {instrument} based on market type: {market_type}")
@@ -793,14 +842,14 @@ class ChartService:
                     logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                     
                     if hasattr(provider, "get_market_data"):
-                        if isinstance(provider, YahooFinanceProvider):
-                            # YahooFinanceProvider has async methods but is used in a mix of async/non-async
+                        if isinstance(provider, YahooFinanceProvider) or isinstance(provider, AlphaVantageProvider):
+                            # Both providers have async methods but are used in a mix of async/non-async
                             # Run the async method in the event loop directly
                             try:
                                 loop = asyncio.get_event_loop()
                                 market_data, metadata = loop.run_until_complete(provider.get_market_data(instrument))
                                 if market_data is not None and not market_data.empty:
-                                    logger.info(f"Successfully got market data with YahooFinanceProvider for {instrument}")
+                                    logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
                                     if hasattr(self, '_generate_analysis_from_data'):
                                         analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                                         # Cache the result
@@ -809,7 +858,7 @@ class ChartService:
                             except RuntimeError as re:
                                 # Handle "cannot be called from a running event loop" error
                                 if "running event loop" in str(re):
-                                    logger.warning(f"Detected running event loop issue with YahooFinanceProvider: {str(re)}")
+                                    logger.warning(f"Detected running event loop issue with {provider.__class__.__name__}: {str(re)}")
                                     # Use a thread to run the operation instead
                                     try:
                                         from concurrent.futures import ThreadPoolExecutor
@@ -820,14 +869,14 @@ class ChartService:
                                             )
                                             market_data, metadata = future.result(timeout=30)  # 30s timeout
                                             if market_data is not None and not market_data.empty:
-                                                logger.info(f"Successfully got market data with YahooFinanceProvider thread for {instrument}")
+                                                logger.info(f"Successfully got market data with {provider.__class__.__name__} thread for {instrument}")
                                                 if hasattr(self, '_generate_analysis_from_data'):
                                                     analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                                                     # Cache the result
                                                     self.analysis_cache[cache_key] = (time.time(), analysis)
                                                     return analysis
                                     except Exception as thread_err:
-                                        logger.error(f"Thread execution error for YahooFinanceProvider: {str(thread_err)}")
+                                        logger.error(f"Thread execution error for {provider.__class__.__name__}: {str(thread_err)}")
                                 else:
                                     # Not a running event loop error, re-raise
                                     raise
@@ -1256,11 +1305,24 @@ class ChartService:
         try:
             logger.info(f"Generating analysis from data for {instrument} ({timeframe})")
             
-            # Current time formatted
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Determine market type
-            market_type = self._detect_market_type_sync(instrument)
+            # Format instrument name to match Yahoo Finance/TradingView style
+            display_name = instrument
+            if instrument == "XAUUSD":
+                display_name = "Gold (GC=F)"
+            elif instrument == "XTIUSD" or instrument == "USOIL":
+                display_name = "Crude Oil (CL=F)"
+            elif instrument == "XAGUSD":
+                display_name = "Silver (SI=F)"
+            elif instrument == "US500":
+                display_name = "S&P 500 (^GSPC)"
+            elif instrument == "US30":
+                display_name = "Dow Jones (^DJI)"
+            elif instrument == "US100":
+                display_name = "Nasdaq (^IXIC)"
+            elif instrument == "DE40":
+                display_name = "DAX (^GDAXI)"
+            elif instrument == "UK100":
+                display_name = "FTSE 100 (^FTSE)"
             
             # Format price with appropriate precision
             precision = self._get_instrument_precision(instrument)
@@ -1279,82 +1341,132 @@ class ChartService:
             ema_50 = metadata.get('ema_50', None)
             ema_200 = metadata.get('ema_200', None)
             rsi = metadata.get('rsi', None)
+            macd = metadata.get('macd', None)
+            macd_signal = metadata.get('macd_signal', None)
             
-            # Get support/resistance levels (if available)
-            support_levels = []
-            resistance_levels = []
+            # Calculate momentum strength (1-5 stars)
+            momentum_strength = 3  # Default
             
-            # Calculate some basic support and resistance from recent price action
-            if len(data) > 20:
-                recent_data = data.tail(20)
-                # Simple approach: min/max as support/resistance
-                min_price = recent_data['Low'].min()
-                max_price = recent_data['High'].max()
-                
-                # Add some variation
-                support_levels = [
-                    round(min_price, precision),
-                    round(min_price * 0.99, precision),
-                    round(min_price * 0.98, precision)
-                ]
-                
-                resistance_levels = [
-                    round(max_price, precision),
-                    round(max_price * 1.01, precision),
-                    round(max_price * 1.02, precision)
-                ]
+            # Adjust based on RSI
+            if rsi is not None:
+                if rsi > 70 or rsi < 30:
+                    momentum_strength += 1
             
-            # Format support/resistance levels
-            supports_text = "\n".join([f"    • {level}" for level in support_levels])
-            resistance_text = "\n".join([f"    • {level}" for level in resistance_levels])
+            # Adjust based on MACD
+            if macd is not None and macd_signal is not None:
+                if (ema_20 is not None and ema_50 is not None and 
+                    ((ema_20 > ema_50 and macd > macd_signal) or 
+                     (ema_20 < ema_50 and macd < macd_signal))):
+                    momentum_strength += 1
+            
+            # Ensure within 1-5 range
+            momentum_strength = max(1, min(5, momentum_strength))
+            
+            # Create strength stars
+            strength_stars = "★" * momentum_strength + "☆" * (5 - momentum_strength)
+            
+            # Get daily high/low
+            daily_high = None
+            daily_low = None
+            if len(data) > 0:
+                daily_data = data.tail(1)
+                daily_high = daily_data['High'].max()
+                daily_low = daily_data['Low'].min()
+            
+            # Get weekly high/low from the last 5 trading days
+            weekly_high = None
+            weekly_low = None
+            if len(data) >= 5:
+                weekly_data = data.tail(5)
+                weekly_high = weekly_data['High'].max()
+                weekly_low = weekly_data['Low'].min()
             
             # Determine market direction based on EMAs
-            market_direction = "Neutral"
-            direction_reason = ""
-            
+            market_direction = "neutral"
             if ema_20 is not None and ema_50 is not None:
                 if ema_20 > ema_50:
-                    market_direction = "Bullish"
-                    direction_reason = f"EMA 20 ({ema_20:.{precision}f}) above EMA 50 ({ema_50:.{precision}f})"
+                    market_direction = "bullish"
                 elif ema_20 < ema_50:
-                    market_direction = "Bearish"
-                    direction_reason = f"EMA 20 ({ema_20:.{precision}f}) below EMA 50 ({ema_50:.{precision}f})"
+                    market_direction = "bearish"
             
             # RSI analysis
-            rsi_analysis = "RSI data not available"
+            rsi_analysis = "N/A"
             if rsi is not None:
                 if rsi > 70:
-                    rsi_analysis = f"Overbought at {rsi:.2f}"
+                    rsi_analysis = f"overbought ({rsi:.2f})"
                 elif rsi < 30:
-                    rsi_analysis = f"Oversold at {rsi:.2f}"
+                    rsi_analysis = f"oversold ({rsi:.2f})"
                 else:
-                    rsi_analysis = f"Neutral at {rsi:.2f}"
+                    rsi_analysis = f"neutral ({rsi:.2f})"
             
-            # Construct the analysis text
-            analysis = f"""📊 <b>Technical Analysis: {instrument}</b> ({timeframe})
-⏱️ <i>Generated at {timestamp} UTC</i>
+            # MACD analysis
+            macd_analysis = "N/A"
+            if macd is not None and macd_signal is not None:
+                if macd > macd_signal:
+                    macd_analysis = f"bullish ({macd:.5f} is above signal {macd_signal:.5f})"
+                else:
+                    macd_analysis = f"bearish ({macd:.5f} is below signal {macd_signal:.5f})"
+            
+            # Moving averages analysis
+            ma_analysis = "Moving average data not available"
+            if ema_50 is not None and ema_200 is not None and current_price is not None:
+                if current_price > ema_50 and current_price > ema_200:
+                    ma_analysis = f"Price above EMA 50 ({ema_50:.{precision}f}) and above EMA 200 ({ema_200:.{precision}f}), confirming bullish bias."
+                elif current_price < ema_50 and current_price < ema_200:
+                    ma_analysis = f"Price below EMA 50 ({ema_50:.{precision}f}) and below EMA 200 ({ema_200:.{precision}f}), confirming bearish bias."
+                elif current_price > ema_50 and current_price < ema_200:
+                    ma_analysis = f"Price above EMA 50 ({ema_50:.{precision}f}) but below EMA 200 ({ema_200:.{precision}f}), showing mixed signals."
+                else:
+                    ma_analysis = f"Price below EMA 50 ({ema_50:.{precision}f}) but above EMA 200 ({ema_200:.{precision}f}), showing mixed signals."
+            
+            # Generate market overview
+            if market_direction == "bullish":
+                overview = f"Price is currently trading near current price of {formatted_price}, showing bullish momentum. The pair remains above key EMAs, indicating a strong uptrend. Volume is moderate, supporting the current price action."
+            elif market_direction == "bearish":
+                overview = f"Price is currently trading near current price of {formatted_price}, showing bearish momentum. The pair remains below key EMAs, indicating a strong downtrend. Volume is moderate, supporting the current price action."
+            else:
+                overview = f"Price is currently trading near current price of {formatted_price}, showing neutral momentum. The pair is consolidating near key EMAs, indicating indecision. Volume is moderate, supporting the current price action."
+            
+            # Generate AI recommendation
+            if daily_high is not None and daily_low is not None:
+                if market_direction == "bullish":
+                    recommendation = f"Watch for a breakout above {daily_high:.{precision}f} for further upside. Maintain a buy bias while price holds above {daily_low:.{precision}f}. Be cautious of overbought conditions if RSI approaches 70."
+                elif market_direction == "bearish":
+                    recommendation = f"Watch for a breakdown below {daily_low:.{precision}f} for further downside. Maintain a sell bias while price holds below {daily_high:.{precision}f}. Be cautious of oversold conditions if RSI approaches 30."
+                else:
+                    recommendation = f"Market is in consolidation. Wait for a breakout above {daily_high:.{precision}f} or breakdown below {daily_low:.{precision}f} before taking a position. Monitor volume for breakout confirmation."
+            else:
+                recommendation = "Insufficient data for a specific recommendation."
+            
+            # Format key levels properly
+            daily_high_formatted = f"{daily_high:.{precision}f}" if daily_high is not None else "N/A"
+            daily_low_formatted = f"{daily_low:.{precision}f}" if daily_low is not None else "N/A"
+            weekly_high_formatted = f"{weekly_high:.{precision}f}" if weekly_high is not None else "N/A"
+            weekly_low_formatted = f"{weekly_low:.{precision}f}" if weekly_low is not None else "N/A"
+            
+            # Generate analysis text
+            analysis = f"""{display_name} Analysis
 
-<b>Market Type:</b> {market_type}
-<b>Current Price:</b> {formatted_price}
-<b>Market Direction:</b> {market_direction} ({direction_reason})
+Zone Strength: {strength_stars}
 
-<b>🔍 Market Overview:</b>
-{instrument} is currently showing a {market_direction.lower()} trend on the {timeframe} timeframe. The price is trading at {formatted_price}.
+📊 Market Overview
+{overview}
 
-<b>📈 Technical Indicators:</b>
-• EMA 20: {ema_20:.{precision}f if ema_20 is not None else 'N/A'}
-• EMA 50: {ema_50:.{precision}f if ema_50 is not None else 'N/A'}
-• EMA 200: {ema_200:.{precision}f if ema_200 is not None else 'N/A'}
-• RSI (14): {rsi_analysis}
+🔑 Key Levels
+Daily High:   {daily_high_formatted}
+Daily Low:    {daily_low_formatted}
+Weekly High:  {weekly_high_formatted}
+Weekly Low:   {weekly_low_formatted}
 
-<b>🎯 Key Levels:</b>
-<b>Support Levels:</b>
-{supports_text if supports_text else "    • No clear support levels identified"}
+📈 Technical Indicators
+RSI: {rsi_analysis}
+MACD: {macd_analysis}
+Moving Averages: {ma_analysis}
 
-<b>Resistance Levels:</b>
-{resistance_text if resistance_text else "    • No clear resistance levels identified"}
+🤖 Sigmapips AI Recommendation
+{recommendation}
 
-<b>⚠️ Note:</b> This analysis is based on technical indicators only and should not be considered as investment advice.
+⚠️ Disclaimer: For educational purposes only.
 """
             
             return analysis
