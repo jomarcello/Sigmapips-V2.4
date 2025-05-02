@@ -26,10 +26,10 @@ logger.info(f"yfinance version: {yf.__version__ if hasattr(yf, '__version__') el
 
 # --- Cache Configuration ---
 # Cache for raw downloaded data (symbol, interval) -> DataFrame
-# Cache for 5 minutes (300 seconds)
-data_download_cache = TTLCache(maxsize=100, ttl=300) 
+# Cache for 30 minutes (1800 seconds)
+data_download_cache = TTLCache(maxsize=100, ttl=1800) 
 # Cache for processed market data (symbol, timeframe, limit) -> DataFrame with indicators
-market_data_cache = TTLCache(maxsize=100, ttl=300)
+market_data_cache = TTLCache(maxsize=100, ttl=1800)
 
 class YahooFinanceProvider:
     """Provider class for Yahoo Finance API integration"""
@@ -38,8 +38,8 @@ class YahooFinanceProvider:
     _cache = {}
     _cache_timeout = 3600  # Cache timeout in seconds (1 hour)
     _last_api_call = 0
-    _min_delay_between_calls = 2  # Increased delay to 2 seconds
-    _429_backoff_time = 30  # Additional backoff time when 429 is encountered
+    _min_delay_between_calls = 5  # Increased from 2 to 5 seconds
+    _429_backoff_time = 60  # Increased from 30 to 60 seconds
     _session = None
     
     # Track 429 errors
@@ -53,15 +53,8 @@ class YahooFinanceProvider:
         if YahooFinanceProvider._session is None:
             session = requests.Session()
             
-            # Rotating user agents to avoid blocking
-            user_agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11.5; rv:90.0) Gecko/20100101 Firefox/90.0',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36 Edg/92.0.902.55',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_5_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Safari/605.1.15'
-            ]
+            # Use a single consistent modern browser user agent instead of rotating
+            user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             
             retries = Retry(
                 total=5,
@@ -73,9 +66,9 @@ class YahooFinanceProvider:
             session.mount("http://", adapter)
             session.mount("https://", adapter)
             
-            # Use a random user agent
+            # Set the consistent user agent
             session.headers.update({
-                'User-Agent': random.choice(user_agents),
+                'User-Agent': user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -120,12 +113,15 @@ class YahooFinanceProvider:
         
         # Check if we've been experiencing 429 errors recently
         if YahooFinanceProvider._429_count > 0:
-            # If recent 429 error (within last 5 minutes)
-            if current_time - YahooFinanceProvider._429_last_time < 300:  # 5 minutes
+            # If recent 429 error (within last 30 minutes)
+            if current_time - YahooFinanceProvider._429_last_time < 1800:  # 30 minutes instead of 5
                 # Apply exponential backoff based on 429 count
-                backoff_multiplier = min(2 ** YahooFinanceProvider._429_count, 16)  # Cap at 16x
+                backoff_multiplier = min(2 ** YahooFinanceProvider._429_count, 32)  # Cap at 32x instead of 16x
                 delay = YahooFinanceProvider._min_delay_between_calls * backoff_multiplier
                 logger.warning(f"[Yahoo] Using 429 backoff delay of {delay:.2f}s (429 count: {YahooFinanceProvider._429_count})")
+                
+                # Add random jitter to avoid thundering herd
+                delay += random.uniform(1, 5)
             else:
                 # Reset 429 count if no recent 429s
                 YahooFinanceProvider._429_count = 0
@@ -134,7 +130,7 @@ class YahooFinanceProvider:
         if YahooFinanceProvider._last_api_call > 0:
             time_since_last_call = current_time - YahooFinanceProvider._last_api_call
             if time_since_last_call < delay:
-                wait_time = delay - time_since_last_call + random.uniform(0.1, 0.5)
+                wait_time = delay - time_since_last_call + random.uniform(0.5, 2.0)  # Increased jitter
                 logger.info(f"[Yahoo] Rate limiting: Waiting {wait_time:.2f} seconds before next call")
                 await asyncio.sleep(wait_time)
                 
