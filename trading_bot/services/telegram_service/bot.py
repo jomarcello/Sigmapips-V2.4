@@ -43,7 +43,14 @@ from trading_bot.services.telegram_service.states import (
     CHOOSE_ANALYSIS, SIGNAL_DETAILS,
     CALLBACK_MENU_ANALYSE, CALLBACK_MENU_SIGNALS, CALLBACK_ANALYSIS_TECHNICAL,
     CALLBACK_ANALYSIS_SENTIMENT, CALLBACK_ANALYSIS_CALENDAR, CALLBACK_SIGNALS_ADD,
-    CALLBACK_SIGNALS_MANAGE, CALLBACK_BACK_MENU
+    CALLBACK_SIGNALS_MANAGE, CALLBACK_BACK_MENU,
+    CALLBACK_BACK_ANALYSIS, CALLBACK_BACK_MARKET, CALLBACK_BACK_INSTRUMENT,
+    CALLBACK_BACK_SIGNALS, CALLBACK_SIGNAL_TECHNICAL, CALLBACK_SIGNAL_SENTIMENT,
+    CALLBACK_SIGNAL_CALENDAR, CALLBACK_SIGNAL_BACK_ANALYSIS, CALLBACK_SIGNAL_BACK_TO_SIGNAL,
+    CALLBACK_SIGNAL_BACK_TO_SIGNAL_ANALYSIS, CALLBACK_SIGNAL_BACK_SIGNALS,
+    CALLBACK_SIGNAL_SIGNALS_ADD, CALLBACK_SIGNAL_SIGNALS_MANAGE,
+    SIGNAL_ANALYSIS, CALLBACK_SIGNAL_ANALYSIS_TECHNICAL, CALLBACK_SIGNAL_ANALYSIS_SENTIMENT,
+    CALLBACK_SIGNAL_ANALYSIS_CALENDAR, CALLBACK_BACK_TO_SIGNAL,
 )
 import trading_bot.services.telegram_service.gif_utils as gif_utils
 
@@ -2447,6 +2454,9 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                     if signal_id:
                         context.user_data['signal_id_backup'] = signal_id
                     
+                    # Set a flag to indicate we're in signal flow, not menu flow
+                    context.user_data['is_signal_flow'] = True
+                    
                     # Also store info from the actual signal if available
                     if str(update.effective_user.id) in self.user_signals and signal_id in self.user_signals[str(update.effective_user.id)]:
                         signal = self.user_signals[str(update.effective_user.id)][signal_id]
@@ -2464,29 +2474,38 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
                 if instrument and context and hasattr(context, 'user_data'):
                     context.user_data['instrument'] = instrument
                     context.user_data['signal_instrument_backup'] = instrument
+                    context.user_data['is_signal_flow'] = True
             
-            # Show analysis options for this instrument
-            # Format message
-            # Use the SIGNAL_ANALYSIS_KEYBOARD for consistency
-            keyboard = SIGNAL_ANALYSIS_KEYBOARD
+            # Define a special keyboard for the signal flow to avoid overlap with menu flow
+            signal_analysis_keyboard = [
+                [
+                    InlineKeyboardButton("📊 Technical Analysis", callback_data="signal_analysis_technical"),
+                    InlineKeyboardButton("💹 Sentiment Analysis", callback_data="signal_analysis_sentiment")
+                ],
+                [
+                    InlineKeyboardButton("📅 Economic Calendar", callback_data="signal_analysis_calendar"),
+                    InlineKeyboardButton("⬅️ Back to Signal", callback_data="back_to_signal")
+                ]
+            ]
             
             # Try to edit the message text
             try:
                 await query.edit_message_text(
-                    text=f"Select your analysis type:",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    text=f"Select your analysis type for {instrument}:",
+                    reply_markup=InlineKeyboardMarkup(signal_analysis_keyboard),
                     parse_mode=ParseMode.HTML
                 )
             except Exception as e:
                 logger.error(f"Error in analyze_from_signal_callback: {str(e)}")
                 # Fall back to sending a new message
                 await query.message.reply_text(
-                    text=f"Select your analysis type:",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    text=f"Select your analysis type for {instrument}:",
+                    reply_markup=InlineKeyboardMarkup(signal_analysis_keyboard),
                     parse_mode=ParseMode.HTML
                 )
             
-            return CHOOSE_ANALYSIS
+            # Use a specific state for signal flow analysis
+            return SIGNAL_ANALYSIS
         
         except Exception as e:
             logger.error(f"Error in analyze_from_signal_callback: {str(e)}")
@@ -2517,6 +2536,45 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
             # Handle analyze from signal button
             if callback_data.startswith("analyze_from_signal_"):
                 return await self.analyze_from_signal_callback(update, context)
+            
+            # Handle signal flow specific callbacks
+            if callback_data == CALLBACK_SIGNAL_ANALYSIS_TECHNICAL:
+                # Get instrument from context
+                instrument = context.user_data.get('instrument') if context and hasattr(context, 'user_data') else None
+                timeframe = context.user_data.get('signal_timeframe', '1h') if context and hasattr(context, 'user_data') else '1h'
+                
+                if instrument:
+                    # This is in the signal flow, use the instrument from the signal
+                    return await self.show_technical_analysis(update, context, instrument=instrument, timeframe=timeframe)
+                else:
+                    # Fallback to normal technical analysis menu
+                    return await self.analysis_technical_callback(update, context)
+                    
+            elif callback_data == "signal_analysis_sentiment":
+                # Get instrument from context
+                instrument = context.user_data.get('instrument') if context and hasattr(context, 'user_data') else None
+                
+                if instrument:
+                    # This is in the signal flow, use the instrument from the signal
+                    return await self.show_sentiment_analysis(update, context, instrument=instrument)
+                else:
+                    # Fallback to normal sentiment analysis menu
+                    return await self.analysis_sentiment_callback(update, context)
+                    
+            elif callback_data == "signal_analysis_calendar":
+                # Get instrument from context
+                instrument = context.user_data.get('instrument') if context and hasattr(context, 'user_data') else None
+                
+                if instrument:
+                    # This is in the signal flow, use the instrument from the signal
+                    return await self.show_calendar_analysis(update, context, instrument=instrument)
+                else:
+                    # Fallback to normal calendar analysis menu
+                    return await self.analysis_calendar_callback(update, context)
+            
+            elif callback_data == "back_to_signal":
+                # Go back to the signal view
+                return await self.back_to_signal_callback(update, context)
                 
             # Help button
             if callback_data == "help":
@@ -3156,10 +3214,26 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
             technical_analysis = await self.chart_service.get_technical_analysis(instrument, timeframe)
             
             if not chart_image or len(chart_image) < 1000:
-                # If no chart image was generated, create a basic one with matplotlib
-                logger.warning(f"Chart image was empty or too small, using fallback chart for {instrument}")
-                chart_image = self.chart_service.get_fallback_chart(instrument)
+                # Check if we should use fallback or show an error
+                prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
                 
+                if prefer_real_data:
+                    # Show error message when real data is required but not available
+                    logger.error(f"No chart image available for {instrument} and fallback is disabled")
+                    error_text = f"❌ <b>Geen actuele marktdata beschikbaar</b>\n\nHelaas is er op dit moment geen actuele marktdata beschikbaar voor {instrument} ({timeframe}).\n\nProbeer het later opnieuw."
+                    
+                    if query:
+                        await query.edit_message_text(
+                            text=error_text,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=back_callback)]])
+                        )
+                    return SHOW_RESULT
+                else:
+                    # If fallback is allowed, use it
+                    logger.warning(f"Chart image was empty or too small, using fallback chart for {instrument}")
+                    chart_image = self.chart_service.get_fallback_chart(instrument)
+            
             # Prepare caption with technical analysis
             caption = technical_analysis
             
