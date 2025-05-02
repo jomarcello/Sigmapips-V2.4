@@ -6,6 +6,16 @@ echo "======================================================"
 echo "          SIGMAPIPS TRADING BOT LAUNCHER              "
 echo "======================================================"
 
+# Update code van git repository als .git aanwezig is
+if [ -d ".git" ]; then
+    echo "Git repository gedetecteerd, code updaten..."
+    git config --global --add safe.directory "$(pwd)"
+    git pull
+    echo "Code update voltooid."
+else
+    echo "Geen git repository gevonden, overslaan van code update."
+fi
+
 # Controleer of Python is geïnstalleerd
 if ! command -v python3 &> /dev/null; then
     echo "ERROR: Python 3 is niet geïnstalleerd. Installeer Python 3 en probeer het opnieuw."
