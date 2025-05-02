@@ -23,7 +23,14 @@ import re
 import glob
 import tempfile
 import io
-import cv2
+
+# Probeer cv2 (OpenCV) te importeren, maar ga door als het niet beschikbaar is
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    logging.warning("OpenCV (cv2) is niet geïnstalleerd. Fallback mechanismen worden gebruikt voor noodgevallen charts.")
+    CV2_AVAILABLE = False
 
 # Import base class en providers
 from trading_bot.services.chart_service.base import TradingViewService
@@ -279,15 +286,32 @@ class ChartService:
                 with open(chart_placeholder, 'rb') as f:
                     return f.read()
             else:
-                # Anders een heel basic image
+                # Anders een heel basic image met numpy en PIL als cv2 niet beschikbaar is
                 logger.error("Emergency chart placeholder not found")
-                emergency_img = np.ones((400, 600, 3), dtype=np.uint8) * 30
-                cv2.putText(emergency_img, "Chart unavailable", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
-                is_success, buffer = cv2.imencode(".png", emergency_img)
-                if is_success:
-                    return buffer.tobytes()
-            
-            return b''
+                
+                if CV2_AVAILABLE:
+                    emergency_img = np.ones((400, 600, 3), dtype=np.uint8) * 30
+                    cv2.putText(emergency_img, "Chart unavailable", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+                    is_success, buffer = cv2.imencode(".png", emergency_img)
+                    if is_success:
+                        return buffer.tobytes()
+                else:
+                    # Fallback met PIL als cv2 niet beschikbaar is
+                    try:
+                        from PIL import Image, ImageDraw, ImageFont
+                        img = Image.new('RGB', (600, 400), color=(30, 30, 30))
+                        draw = ImageDraw.Draw(img)
+                        draw.text((50, 200), "Chart unavailable", fill=(200, 200, 200))
+                        buf = io.BytesIO()
+                        img.save(buf, format='PNG')
+                        buf.seek(0)
+                        return buf.getvalue()
+                    except ImportError:
+                        # Als ook PIL niet beschikbaar is, maak een lege bytes array
+                        logger.error("PIL is also not available for fallback chart generation")
+                        return b''
+                
+                return b''
 
     async def cleanup(self):
         """Clean up resources"""
