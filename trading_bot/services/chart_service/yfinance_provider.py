@@ -37,8 +37,14 @@ class YahooFinanceProvider:
     _cache = {}
     _cache_timeout = 3600  # Cache timeout in seconds (1 hour)
     _last_api_call = 0
-    _min_delay_between_calls = 1  # Reduced delay slightly to 1 second
+    _min_delay_between_calls = 2  # Increased delay to 2 seconds
+    _429_backoff_time = 30  # Additional backoff time when 429 is encountered
     _session = None
+    
+    # Track 429 errors
+    _429_count = 0
+    _429_last_time = 0
+    _max_429_count = 3  # Maximum number of 429 errors before extended backoff
 
     @staticmethod
     def _get_session():
@@ -107,14 +113,30 @@ class YahooFinanceProvider:
     
     @staticmethod
     async def _wait_for_rate_limit():
-        """Wait if we've hit the rate limit"""
+        """Wait if we've hit the rate limit with adaptive backoff for 429 errors"""
         current_time = time.time()
+        delay = YahooFinanceProvider._min_delay_between_calls
+        
+        # Check if we've been experiencing 429 errors recently
+        if YahooFinanceProvider._429_count > 0:
+            # If recent 429 error (within last 5 minutes)
+            if current_time - YahooFinanceProvider._429_last_time < 300:  # 5 minutes
+                # Apply exponential backoff based on 429 count
+                backoff_multiplier = min(2 ** YahooFinanceProvider._429_count, 16)  # Cap at 16x
+                delay = YahooFinanceProvider._min_delay_between_calls * backoff_multiplier
+                logger.warning(f"[Yahoo] Using 429 backoff delay of {delay:.2f}s (429 count: {YahooFinanceProvider._429_count})")
+            else:
+                # Reset 429 count if no recent 429s
+                YahooFinanceProvider._429_count = 0
+        
+        # Standard rate limiting
         if YahooFinanceProvider._last_api_call > 0:
             time_since_last_call = current_time - YahooFinanceProvider._last_api_call
-            if time_since_last_call < YahooFinanceProvider._min_delay_between_calls:
-                delay = YahooFinanceProvider._min_delay_between_calls - time_since_last_call + random.uniform(0.1, 0.5)
-                logger.info(f"Rate limiting: Waiting {delay:.2f} seconds before next call")
-                await asyncio.sleep(delay)
+            if time_since_last_call < delay:
+                wait_time = delay - time_since_last_call + random.uniform(0.1, 0.5)
+                logger.info(f"[Yahoo] Rate limiting: Waiting {wait_time:.2f} seconds before next call")
+                await asyncio.sleep(wait_time)
+                
         YahooFinanceProvider._last_api_call = time.time()
 
     @staticmethod
@@ -136,7 +158,10 @@ class YahooFinanceProvider:
         else:
             # Fallback cache key if parameters are weird (should not happen often)
             logger.warning("Could not determine proper cache key, using fallback.")
-            cache_key = (symbol, interval, datetime.now().strftime('%Y-%m-%d'))
+            # Use current date (not future date) to avoid cache issues
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            cache_key = (symbol, interval, current_date)
+            logger.info(f"[Yahoo] Using fallback cache key with current date: {current_date}")
 
         if cache_key in data_download_cache:
             logger.info(f"[Yahoo Cache] HIT for download: Key={cache_key}")
@@ -165,7 +190,9 @@ class YahooFinanceProvider:
                     'progress': False,
                     'session': session,
                     'timeout': timeout,
-                    'ignore_tz': False
+                    'ignore_tz': False,
+                    'threads': False,  # Disable multi-threading to avoid issues
+                    'proxy': None  # Let the session handle proxy settings
                 }
                 # Use period OR start/end, not both
                 if period:
@@ -179,6 +206,14 @@ class YahooFinanceProvider:
                 return df
             except Exception as e:
                  logger.error(f"[Yahoo] Error during yf.download for {symbol}: {str(e)}")
+                 # Check for 429 error specifically
+                 if "429" in str(e) or "too many requests" in str(e).lower():
+                     # Update 429 tracking
+                     YahooFinanceProvider._429_count += 1
+                     YahooFinanceProvider._429_last_time = time.time()
+                     logger.warning(f"[Yahoo] 429 Too Many Requests detected (count: {YahooFinanceProvider._429_count})")
+                     # Add extra wait for 429
+                     time.sleep(random.uniform(1.0, 3.0))  # Add immediate delay
                  # Add more specific error checks if needed (e.g., connection errors)
                  if "No data found" in str(e) or "symbol may be delisted" in str(e):
                      logger.warning(f"[Yahoo] No data found for {symbol} in range {start_date} to {end_date}")
@@ -186,10 +221,17 @@ class YahooFinanceProvider:
                  raise # Reraise other exceptions for tenacity
 
         # Run the download in a separate thread to avoid blocking asyncio event loop
-        loop = asyncio.get_event_loop()
         try:
-             # Use default executor (ThreadPoolExecutor)
-             df = await loop.run_in_executor(None, download) 
+             # Use default executor (ThreadPoolExecutor) but get the loop more carefully
+             try:
+                 loop = asyncio.get_running_loop()
+             except RuntimeError:
+                 # If there's no running loop
+                 loop = asyncio.new_event_loop()
+                 asyncio.set_event_loop(loop)
+             
+             # Run download in executor
+             df = await loop.run_in_executor(None, download)
         except Exception as e:
              logger.error(f"[Yahoo] Download failed for {symbol} after retries: {e}")
              df = None # Ensure df is None on failure
@@ -528,8 +570,20 @@ class YahooFinanceProvider:
         cache_key = (symbol, fixed_timeframe, limit) # Use fixed_timeframe in cache key
         if cache_key in market_data_cache:
             logger.info(f"[Yahoo Cache] HIT for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
-            cached_df, cached_info = market_data_cache[cache_key]
-            return cached_df.copy(), cached_info.copy() # Return copies
+            cached_result = market_data_cache[cache_key]
+            # Check if the cached result is None or a tuple before unpacking
+            if cached_result is None:
+                logger.warning(f"[Yahoo Cache] Cached value was None for {symbol}")
+                return None, None
+            # Ensure we have a valid tuple
+            if isinstance(cached_result, tuple) and len(cached_result) == 2:
+                cached_df, cached_info = cached_result
+                return cached_df.copy(), cached_info.copy() # Return copies
+            else:
+                logger.warning(f"[Yahoo Cache] Invalid cached format for {symbol}, expected tuple, got {type(cached_result)}")
+                # Remove invalid format from cache
+                del market_data_cache[cache_key]
+                # Continue with fetching new data
         logger.info(f"[Yahoo Cache] MISS for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
 
         logger.info(f"[Yahoo] Getting market data for {symbol} on fixed {fixed_timeframe} timeframe") # Log fixed timeframe
@@ -543,10 +597,17 @@ class YahooFinanceProvider:
 
             if not yf_interval:
                  logger.error(f"[Yahoo] Could not map fixed timeframe '{fixed_timeframe}' to yfinance interval.")
-                 return None
+                 return None, None
 
             # 2. Determine date range or period and download data
             end_date = datetime.now()
+            
+            # Ensure we're not requesting data from the future
+            if end_date.hour == 0 and end_date.minute < 5:
+                # Subtract a day if it's very early in the day to be safe
+                end_date = end_date - timedelta(days=1)
+                logger.info(f"[Yahoo] Adjusted end date to previous day to avoid future data requests: {end_date.date()}")
+                
             yf_period = None
             start_date = None
 
@@ -717,6 +778,15 @@ class YahooFinanceProvider:
                 logger.error(f"[Yahoo] Error processing market data for {symbol}: {str(download_e)}")
                 if isinstance(download_e, KeyError) and 'Open' in str(download_e):
                      logger.error(f"[Yahoo] Likely issue with column names after download for {symbol}. Raw columns: {df.columns if 'df' in locals() and df is not None else 'N/A'}")
+                
+                # Special handling for 429 errors
+                if "429" in str(download_e) or "too many requests" in str(download_e).lower():
+                    logger.warning(f"[Yahoo] 429 Too Many Requests detected in get_market_data. Adding to 429 counter.")
+                    YahooFinanceProvider._429_count += 1
+                    YahooFinanceProvider._429_last_time = time.time()
+                    # Add a longer delay for main flow 429s to allow rate limiting to recover
+                    await asyncio.sleep(YahooFinanceProvider._429_backoff_time * min(YahooFinanceProvider._429_count, 3))
+                
                 logger.error(traceback.format_exc()) # Log full traceback for download errors
                 market_data_cache[cache_key] = None # Cache None result on error
                 raise download_e
@@ -737,7 +807,13 @@ class YahooFinanceProvider:
             # Wait for rate limit
             await YahooFinanceProvider._wait_for_rate_limit()
             
-            loop = asyncio.get_event_loop()
+            # Get loop more carefully
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # If there's no running loop
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             
             # Get stock info with yfinance
             def get_info():
@@ -865,6 +941,12 @@ class YahooFinanceProvider:
                 
             # Determine start date based on timeframe
             end_date = datetime.now()
+            
+            # Ensure we're not requesting data from the future
+            if end_date.hour == 0 and end_date.minute < 5:
+                # Subtract a day if it's very early in the day to be safe
+                end_date = end_date - timedelta(days=1)
+                logger.info(f"[Yahoo] Adjusted end date to previous day to avoid future data requests: {end_date.date()}")
             
             # How many candles to show
             num_candles = 100
