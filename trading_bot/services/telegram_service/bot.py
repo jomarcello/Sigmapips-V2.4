@@ -1180,90 +1180,50 @@ class TelegramService:
             return f"New {signal_data.get('instrument', 'Unknown')} {signal_data.get('direction', 'Unknown')} Signal"
 
     def _register_handlers(self, application):
-        """Register event handlers for bot commands and callback queries"""
+        """Register command handlers for the bot"""
         try:
-            logger.info("Registering command handlers")
+            self.logger.info("Registering command handlers")
             
-            # Initialize the application without using run_until_complete
-            try:
-                # Instead of using loop.run_until_complete, directly call initialize 
-                # which will be properly awaited by the caller
-                self.init_task = application.initialize()
-                logger.info("Telegram application initialization ready to be awaited")
-            except Exception as init_e:
-                logger.error(f"Error during application initialization: {str(init_e)}")
-                logger.exception(init_e)
-                
-            # Set bot commands for menu
-            commands = [
-                BotCommand("start", "Start the bot and get the welcome message"),
-                BotCommand("menu", "Show the main menu"),
-                BotCommand("help", "Show available commands and how to use the bot")
-            ]
-            
-            # Store the set_commands task to be awaited later
-            try:
-                # Instead of asyncio.create_task, we will await this in the startup event
-                self.set_commands_task = self.bot.set_my_commands(commands)
-                logger.info("Bot commands ready to be set")
-            except Exception as cmd_e:
-                logger.error(f"Error preparing bot commands: {str(cmd_e)}")
-            
-            # Register command handlers
+            # Commands
             application.add_handler(CommandHandler("start", self.start_command))
-            application.add_handler(CommandHandler("menu", self.menu_command))
             application.add_handler(CommandHandler("help", self.help_command))
+            application.add_handler(CommandHandler("menu", self.menu_command))
             
-            # Register callback handlers
-            application.add_handler(CallbackQueryHandler(self.menu_analyse_callback, pattern="^menu_analyse$"))
-            application.add_handler(CallbackQueryHandler(self.menu_signals_callback, pattern="^menu_signals$"))
-            application.add_handler(CallbackQueryHandler(self.signals_add_callback, pattern="^signals_add$"))
+            # Signal management flow
             application.add_handler(CallbackQueryHandler(self.signals_manage_callback, pattern="^signals_manage$"))
-            application.add_handler(CallbackQueryHandler(self.market_callback, pattern="^market_"))
-            application.add_handler(CallbackQueryHandler(self.instrument_callback, pattern="^instrument_(?!.*_signals)"))
-            application.add_handler(CallbackQueryHandler(self.instrument_signals_callback, pattern="^instrument_.*_signals$"))
-            
-            # Add handler for back buttons
-            application.add_handler(CallbackQueryHandler(self.back_market_callback, pattern="^back_market$"))
-            application.add_handler(CallbackQueryHandler(self.back_instrument_callback, pattern="^back_instrument$"))
+            application.add_handler(CallbackQueryHandler(self.signals_add_callback, pattern="^signals_add$"))
+            application.add_handler(CallbackQueryHandler(self.menu_signals_callback, pattern="^menu_signals$"))
             application.add_handler(CallbackQueryHandler(self.back_signals_callback, pattern="^back_signals$"))
+            
+            # Main menu callbacks
+            application.add_handler(CallbackQueryHandler(self.menu_analyse_callback, pattern="^menu_analysis$"))
+            
+            # Analysis flow
+            application.add_handler(CallbackQueryHandler(self.analysis_callback, pattern="^analysis_"))
+            application.add_handler(CallbackQueryHandler(self.analysis_technical_callback, pattern="^technical_"))
+            application.add_handler(CallbackQueryHandler(self.analysis_sentiment_callback, pattern="^sentiment_"))
+            application.add_handler(CallbackQueryHandler(self.analysis_calendar_callback, pattern="^calendar_"))
+            application.add_handler(CallbackQueryHandler(self.back_to_signal_analysis_callback, pattern="^back_signal_analysis$"))
+            
+            # Verwijder of voeg commentaar toe aan de market_callback regel omdat deze methode niet bestaat
+            # application.add_handler(CallbackQueryHandler(self.market_callback, pattern="^market_"))
+            
+            # Navigation callbacks
             application.add_handler(CallbackQueryHandler(self.back_menu_callback, pattern="^back_menu$"))
-            
-            # Analysis handlers for regular flow
-            application.add_handler(CallbackQueryHandler(self.analysis_technical_callback, pattern="^analysis_technical$"))
-            application.add_handler(CallbackQueryHandler(self.analysis_sentiment_callback, pattern="^analysis_sentiment$"))
-            application.add_handler(CallbackQueryHandler(self.analysis_calendar_callback, pattern="^analysis_calendar$"))
-            
-            # Analysis handlers for signal flow - with instrument embedded in callback
-            application.add_handler(CallbackQueryHandler(self.analysis_technical_callback, pattern="^analysis_technical_signal_.*$"))
-            application.add_handler(CallbackQueryHandler(self.analysis_sentiment_callback, pattern="^analysis_sentiment_signal_.*$"))
-            application.add_handler(CallbackQueryHandler(self.analysis_calendar_callback, pattern="^analysis_calendar_signal_.*$"))
-            
-            # Signal analysis flow handlers
-            application.add_handler(CallbackQueryHandler(self.signal_technical_callback, pattern="^signal_technical$"))
-            application.add_handler(CallbackQueryHandler(self.signal_sentiment_callback, pattern="^signal_sentiment$"))
-            application.add_handler(CallbackQueryHandler(self.signal_calendar_callback, pattern="^signal_calendar$"))
-            application.add_handler(CallbackQueryHandler(self.signal_calendar_callback, pattern="^signal_flow_calendar_.*$"))
-            application.add_handler(CallbackQueryHandler(self.back_to_signal_callback, pattern="^back_to_signal$"))
-            application.add_handler(CallbackQueryHandler(self.back_to_signal_analysis_callback, pattern="^back_to_signal_analysis$"))
-            
-            # Signal from analysis
-            application.add_handler(CallbackQueryHandler(self.analyze_from_signal_callback, pattern="^analyze_from_signal_.*$"))
-            
-            # Ensure back_instrument is properly handled
             application.add_handler(CallbackQueryHandler(self.back_instrument_callback, pattern="^back_instrument$"))
             
-            # Catch-all handler for any other callbacks
-            application.add_handler(CallbackQueryHandler(self.button_callback))
+            # Subscription handlers
+            application.add_handler(CallbackQueryHandler(self.handle_subscription_callback, pattern="^subscribe_"))
             
-            # Don't load signals here - it will be done in initialize_services
-            # self._load_signals()
+            # Fallback for unknown callback patterns
+            application.add_handler(CallbackQueryHandler(self.back_menu_callback))  # Fallback voor onbekende callbacks
             
-            logger.info("Bot setup completed successfully")
+            # Verwijder de error handler regel omdat deze methode niet bestaat in de TelegramService class
+            # application.add_error_handler(self.error_handler)
             
         except Exception as e:
-            logger.error(f"Error setting up bot handlers: {str(e)}")
-            logger.exception(e)
+            self.logger.error(f"Error setting up bot handlers: {str(e)}")
+            self.logger.error(str(e))
 
     @property
     def signals_enabled(self):
@@ -2451,38 +2411,25 @@ To continue using Sigmapips AI and receive trading signals, please reactivate yo
             return f"New {signal_data.get('instrument', 'Unknown')} {signal_data.get('direction', 'Unknown')} Signal"
 
     async def _load_signals(self):
-        """Load and cache previously saved signals"""
+        """Load active signals from database or initialize empty signals"""
         try:
-            # Initialize user_signals dictionary if it doesn't exist
-            if not hasattr(self, 'user_signals'):
-                self.user_signals = {}
-                
-            # If we have a database connection, load signals from there
-            if self.db:
-                # Get all active signals from the database
+            # Controleer of de methode bestaat in de database object
+            if hasattr(self.db, 'get_active_signals'):
                 signals = await self.db.get_active_signals()
-                
-                # Organize signals by user_id for quick access
-                for signal in signals:
-                    user_id = str(signal.get('user_id'))
-                    signal_id = signal.get('id')
-                    
-                    # Initialize user dictionary if needed
-                    if user_id not in self.user_signals:
-                        self.user_signals[user_id] = {}
-                    
-                    # Store the signal
-                    self.user_signals[user_id][signal_id] = signal
-                
-                logger.info(f"Loaded {len(signals)} signals for {len(self.user_signals)} users")
+                self.signals = signals or []
             else:
-                logger.warning("No database connection available for loading signals")
+                # Fallback als de methode niet bestaat
+                self.logger.warning("Database heeft geen get_active_signals methode. Lege signaallijst gebruikt.")
+                self.signals = []
                 
+            self.logger.info(f"Loaded {len(self.signals)} active signals")
         except Exception as e:
-            logger.error(f"Error loading signals: {str(e)}")
-            logger.exception(e)
-            # Initialize empty dict on error
-            self.user_signals = {}
+            self.logger.error(f"Error loading signals: {str(e)}")
+            self.logger.error(str(e))
+            # Fallback naar lege lijst bij fouten
+            self.signals = []
+        
+        self.logger.info("Signals loaded")
 
     async def back_signals_callback(self, update: Update, context=None) -> int:
         """Handle back_signals button press"""
