@@ -33,13 +33,33 @@ class DirectYahooProvider:
     _cache = {}
     _cache_timeout = 3600  # Cache timeout in seconds (1 hour)
     _last_api_call = 0
-    _min_delay_between_calls = 1  # Rate limiting
+    _min_delay_between_calls = 5  # Verhoogd van 1 naar 5 seconden
+    
+    # 429 tracking
+    _429_count = 0
+    _429_last_time = 0
+    _max_429_count = 3  # Maximum number of 429 errors before extended backoff
 
     @staticmethod
     async def _wait_for_rate_limit():
-        """Simple rate limiting for API calls"""
+        """Enhanced rate limiting for API calls with 429 backoff logic"""
         current_time = time.time()
         delay = DirectYahooProvider._min_delay_between_calls
+        
+        # Check if we've been experiencing 429 errors recently
+        if DirectYahooProvider._429_count > 0:
+            # If recent 429 error (within last 30 minutes)
+            if current_time - DirectYahooProvider._429_last_time < 1800:
+                # Apply exponential backoff based on 429 count
+                backoff_multiplier = min(2 ** DirectYahooProvider._429_count, 32)  # Cap at 32x
+                delay = DirectYahooProvider._min_delay_between_calls * backoff_multiplier
+                logger.warning(f"[YFinance] Using 429 backoff delay of {delay:.2f}s (429 count: {DirectYahooProvider._429_count})")
+                
+                # Add random jitter to avoid thundering herd
+                delay += random.uniform(1, 5)
+            else:
+                # Reset 429 count if no recent 429s
+                DirectYahooProvider._429_count = 0
         
         # Standard rate limiting
         if DirectYahooProvider._last_api_call > 0:
@@ -111,6 +131,14 @@ class DirectYahooProvider:
                 
                 return df
                 
+            except yf.exceptions.YFRateLimitError as rate_error:
+                # Track 429 error for backoff algorithm
+                DirectYahooProvider._429_count += 1
+                DirectYahooProvider._429_last_time = time.time()
+                
+                logger.error(f"[YFinance] Rate limit (429) hit for {symbol}: {str(rate_error)}")
+                logger.warning(f"[YFinance] Increasing backoff - 429 count now at {DirectYahooProvider._429_count}")
+                return None
             except Exception as e:
                 logger.error(f"[YFinance] Error downloading data: {str(e)}")
                 traceback.print_exc()
@@ -227,6 +255,13 @@ class DirectYahooProvider:
             A tuple: (DataFrame with indicators, analysis_info dictionary)
         """
         try:
+            # Periodieke reset van 429 counter als het te lang geleden is (>3 uur)
+            current_time = time.time()
+            if current_time - DirectYahooProvider._429_last_time > 10800:  # 3 uur in seconden
+                if DirectYahooProvider._429_count > 0:
+                    logger.info(f"[YFinance] Resetting 429 counter (was {DirectYahooProvider._429_count}) after 3 hours")
+                    DirectYahooProvider._429_count = 0
+            
             logger.info(f"[YFinance] Fetching market data for {symbol} (timeframe: {timeframe}, limit: {limit})")
         except Exception as e:
             logger.error(f"[YFinance] Error in initial check: {e}")
