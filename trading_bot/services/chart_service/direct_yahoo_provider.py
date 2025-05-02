@@ -73,7 +73,7 @@ class DirectYahooProvider:
 
     @staticmethod
     async def _download_data(symbol: str, interval: str = "1d", period: str = "1mo") -> pd.DataFrame:
-        """Download data using yfinance library with caching or fallback to mock data if rate limited."""
+        """Download data using yfinance library with caching."""
         logger.info(f"[YFinance] Starting download for {symbol} with interval={interval}, period={period}")
         
         # --- Caching Logic ---
@@ -138,18 +138,12 @@ class DirectYahooProvider:
                 
                 logger.error(f"[YFinance] Rate limit (429) hit for {symbol}: {str(rate_error)}")
                 logger.warning(f"[YFinance] Increasing backoff - 429 count now at {DirectYahooProvider._429_count}")
-                
-                # Genereer mock data in plaats van None terug te geven
-                logger.info(f"[YFinance] Generating mock data for {symbol} due to rate limiting")
-                return DirectYahooProvider._generate_mock_data(symbol, interval, period)
+                return None
                 
             except Exception as e:
                 logger.error(f"[YFinance] Error downloading data: {str(e)}")
                 traceback.print_exc()
-                
-                # In geval van een andere fout, ook mock data genereren
-                logger.info(f"[YFinance] Generating mock data for {symbol} after download error")
-                return DirectYahooProvider._generate_mock_data(symbol, interval, period)
+                return None
         
         # Execute download in thread pool
         loop = asyncio.get_running_loop()
@@ -157,13 +151,6 @@ class DirectYahooProvider:
         
         if df is None or df.empty:
             logger.error(f"[YFinance] No data returned or error for {symbol}")
-            # Probeer mock data te genereren als laatste redmiddel
-            df = DirectYahooProvider._generate_mock_data(symbol, interval, period)
-            if df is not None and not df.empty:
-                logger.info(f"[YFinance] Using mock data for {symbol} as last resort")
-                # Cache it
-                data_download_cache[cache_key] = df.copy()
-                return df
             return None
             
         return df
@@ -663,152 +650,4 @@ class DirectYahooProvider:
         
         except Exception as e:
             logger.error(f"Error getting available markets: {str(e)}")
-            return None 
-
-    @staticmethod
-    def _generate_mock_data(symbol: str, interval: str = "1d", period: str = "1mo") -> pd.DataFrame:
-        """Generate realistic mock data for a given symbol.
-        This is used when Yahoo Finance rate limits our requests.
-        """
-        try:
-            logger.info(f"[YFinance] Generating mock data for {symbol} with interval={interval}")
-            
-            # Bepaal het aantal datapunten op basis van interval en period
-            num_points = 100  # Default
-            if interval == "1m":
-                num_points = 390  # ~6.5 uur handelsdag
-            elif interval == "5m":
-                num_points = 78  # ~6.5 uur handelsdag
-            elif interval == "15m":
-                num_points = 26  # ~6.5 uur handelsdag
-            elif interval == "30m":
-                num_points = 13  # ~6.5 uur handelsdag
-            elif interval == "1h":
-                num_points = 100  # ~4 dagen
-            elif interval == "4h":
-                num_points = 100  # ~16 dagen
-            elif interval == "1d":
-                num_points = 100  # ~100 dagen
-                
-            # Genereer datums op basis van interval
-            end_date = pd.Timestamp.now()
-            if interval == "1m":
-                start_date = end_date - pd.Timedelta(hours=6.5)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            elif interval == "5m":
-                start_date = end_date - pd.Timedelta(hours=6.5)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            elif interval == "15m":
-                start_date = end_date - pd.Timedelta(hours=6.5)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            elif interval == "30m":
-                start_date = end_date - pd.Timedelta(hours=6.5)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            elif interval == "1h":
-                start_date = end_date - pd.Timedelta(days=4)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            elif interval == "4h":
-                start_date = end_date - pd.Timedelta(days=16)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            else:  # Default for 1d and others
-                start_date = end_date - pd.Timedelta(days=100)
-                dates = pd.date_range(start=start_date, end=end_date, periods=num_points)
-            
-            # Bepaal de basisprijs en volatiliteit op basis van het symbool
-            base_price = 100.0  # Default
-            volatility = 0.01    # Default (1%)
-            
-            # Verschillende instellingen per type instrument
-            # Forex pairs
-            if symbol in ["EURUSD=X", "EUR=X"]:
-                base_price = 1.08
-                volatility = 0.005
-            elif symbol in ["GBPUSD=X", "GBP=X"]:
-                base_price = 1.27
-                volatility = 0.007
-            elif symbol in ["USDJPY=X", "JPY=X"]:
-                base_price = 155.0
-                volatility = 0.006
-            # Indices
-            elif symbol in ["^DJI", "US30"]:
-                base_price = 39000.0
-                volatility = 0.015
-            elif symbol in ["^GSPC", "US500"]:
-                base_price = 5200.0
-                volatility = 0.013
-            elif symbol in ["^NDX", "US100"]:
-                base_price = 18200.0
-                volatility = 0.017
-            # Commodities
-            elif symbol in ["GC=F", "XAUUSD"]:
-                base_price = 2310.0
-                volatility = 0.012
-            elif symbol in ["SI=F", "XAGUSD"]:
-                base_price = 28.5
-                volatility = 0.02
-            elif symbol in ["CL=F", "XTIUSD", "USOIL"]:
-                base_price = 78.5
-                volatility = 0.025
-            # Crypto
-            elif symbol in ["BTC-USD", "BTCUSD"]:
-                base_price = 66500.0
-                volatility = 0.035
-            elif symbol in ["ETH-USD", "ETHUSD"]:
-                base_price = 3300.0
-                volatility = 0.04
-                
-            # Genereer een realistische prijsbeweging
-            np.random.seed(int(time.time()) % 1000)  # Zorg voor verschillende resultaten elke keer
-            
-            # Start met random walk
-            returns = np.random.normal(0.0001, volatility, num_points)
-            price_path = np.cumprod(1 + returns) * base_price
-            
-            # Voeg wat up/down trends toe met momentum om realistischer te lijken
-            trend = np.linspace(-0.1, 0.1, num_points)  # Lichte trend
-            momentum = 0.8
-            for i in range(1, len(returns)):
-                if i < num_points // 2:
-                    returns[i] = returns[i-1] * momentum + returns[i] * (1-momentum) + trend[i] * 0.001
-                else:
-                    returns[i] = returns[i-1] * momentum + returns[i] * (1-momentum) - trend[i] * 0.001
-            
-            # Voeg dagelijkse/wekelijkse seizoenseffecten toe
-            if interval in ["1m", "5m", "15m", "30m", "1h"]:
-                # Simuleer dagelijkse openings/sluitingstijd effecten
-                daily_effect = np.sin(np.linspace(0, np.pi, num_points)) * 0.003
-                price_path = price_path * (1 + daily_effect)
-            
-            # Genereer OHLC data
-            close_prices = price_path
-            open_prices = close_prices * (1 + np.random.normal(0, 0.002, num_points))
-            high_prices = np.maximum(close_prices, open_prices) * (1 + np.abs(np.random.normal(0, 0.004, num_points)))
-            low_prices = np.minimum(close_prices, open_prices) * (1 - np.abs(np.random.normal(0, 0.004, num_points)))
-            
-            # Handelsvolume simuleren (hogere volumes op grotere prijsbewegingen)
-            base_volume = 1000000.0
-            if "BTC" in symbol or "ETH" in symbol:
-                base_volume = 10000.0
-            elif "XAU" in symbol or "GC=F" in symbol:
-                base_volume = 100000.0
-            
-            # Volume correleren met prijsbeweging
-            abs_returns = np.abs(np.diff(np.append(base_price, close_prices)))
-            volume = base_volume * (1 + 5 * abs_returns / np.mean(abs_returns))
-            
-            # Maak DataFrame met de gegenereerde data
-            df = pd.DataFrame({
-                'Open': open_prices,
-                'High': high_prices,
-                'Low': low_prices,
-                'Close': close_prices,
-                'Volume': volume
-            }, index=dates)
-            
-            logger.info(f"[YFinance] Successfully generated mock data for {symbol} with shape {df.shape}")
-            return df
-            
-        except Exception as e:
-            logger.error(f"[YFinance] Error generating mock data: {str(e)}")
-            logger.error(traceback.format_exc())
             return None 
