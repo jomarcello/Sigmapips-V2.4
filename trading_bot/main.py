@@ -123,7 +123,9 @@ async def lifespan(app: FastAPI):
         telegram_service.application.add_handler(CommandHandler("help", telegram_service.help_command))
         telegram_service.application.add_handler(CommandHandler("set_subscription", telegram_service.set_subscription_command))
         telegram_service.application.add_handler(CommandHandler("set_payment_failed", telegram_service.set_payment_failed_command))
-        telegram_service.application.add_handler(CallbackQueryHandler(telegram_service.button_callback))
+        
+        # Vervang de verwijzing naar button_callback door back_menu_callback als fallback handler
+        telegram_service.application.add_handler(CallbackQueryHandler(telegram_service.back_menu_callback))
         
         # Load signals - use await with the async method
         await telegram_service._load_signals()
