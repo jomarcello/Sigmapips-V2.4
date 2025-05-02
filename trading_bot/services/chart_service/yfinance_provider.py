@@ -473,20 +473,26 @@ class YahooFinanceProvider:
               return str(days_needed) # Return as string for consistency before ValueError check
 
     @staticmethod
-    async def get_market_data(symbol: str, limit: int = 100) -> Optional[Tuple[pd.DataFrame, Dict]]:
+    async def get_market_data(symbol: str, timeframe: str = "1h", limit: int = 100) -> Optional[Tuple[pd.DataFrame, Dict]]:
         """
-        Fetches market data from Yahoo Finance for a FIXED timeframe (H1), validates it, and calculates indicators.
-        Returns a tuple: (DataFrame with indicators, analysis_info dictionary)
+        Fetches market data from Yahoo Finance for the specified timeframe, validates it, and calculates indicators.
+        
+        Args:
+            symbol: The instrument symbol to fetch data for
+            timeframe: The timeframe for the data (e.g., 1h, 4h, 1d)
+            limit: The maximum number of data points to return
+            
+        Returns:
+            A tuple: (DataFrame with indicators, analysis_info dictionary)
         """
         # Verifieer systeemdatum, maar gebruik gewoon vaste periodes
         try:
-            logger.info(f"[Yahoo] Fetching market data for {symbol} (limit: {limit})")
+            logger.info(f"[Yahoo] Fetching market data for {symbol} (timeframe: {timeframe}, limit: {limit})")
         except Exception as date_check_e:
             logger.error(f"[Yahoo] Error in initial check: {date_check_e}")
             
-        # <<< FIXED TIMEFRAME >>>
-        fixed_timeframe = "H1" 
-        # <<< END FIXED TIMEFRAME >>>
+        # Use the provided timeframe instead of a fixed one
+        fixed_timeframe = timeframe
 
         # Genereer een cache key die niet afhankelijk is van datum
         # We gebruiken alleen symbol, timeframe en limit (geen datums)
@@ -510,17 +516,17 @@ class YahooFinanceProvider:
                 # Continue with fetching new data
         logger.info(f"[Yahoo Cache] MISS for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
 
-        logger.info(f"[Yahoo] Getting market data for {symbol} on fixed {fixed_timeframe} timeframe") # Log fixed timeframe
+        logger.info(f"[Yahoo] Getting market data for {symbol} on timeframe {fixed_timeframe}") # Log timeframe
         df = None
         analysis_info = {}
 
         try:
             # 1. Format symbol and map timeframe
             formatted_symbol = YahooFinanceProvider._format_symbol(symbol, is_crypto=False, is_commodity=False) # Assume not crypto/commodity unless detected
-            yf_interval = YahooFinanceProvider._map_timeframe_to_yfinance(fixed_timeframe) # Use fixed_timeframe
+            yf_interval = YahooFinanceProvider._map_timeframe_to_yfinance(fixed_timeframe) # Use the provided timeframe
 
             if not yf_interval:
-                 logger.error(f"[Yahoo] Could not map fixed timeframe '{fixed_timeframe}' to yfinance interval.")
+                 logger.error(f"[Yahoo] Could not map timeframe '{fixed_timeframe}' to yfinance interval.")
                  return None, None
 
             # 2. ALLEEN period gebruiken, geen datums (veel betrouwbaarder)
