@@ -22,6 +22,8 @@ import traceback
 import re
 import glob
 import tempfile
+import io
+import cv2
 
 # Import base class en providers
 from trading_bot.services.chart_service.base import TradingViewService
@@ -142,176 +144,149 @@ class ChartService:
     async def get_chart(self, instrument: str, timeframe: str = "1h", fullscreen: bool = False) -> bytes:
         """Get a chart for a specific instrument and timeframe."""
         start_time = time.time()
-        logger.info(f"🔍 [CHART FLOW START] Getting chart for {instrument} with timeframe {timeframe}")
+        logger.info(f"🔍 Getting chart for {instrument} with timeframe {timeframe}")
         
         try:
-            # Controleren of we echte data moeten forceren
-            prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
-            
-            # Controleer of de service is geïnitialiseerd
-            if not hasattr(self, 'chart_providers') or not self.chart_providers:
-                logger.error("Chart service not initialized")
-                return b''
-
             # Normaliseer het instrument
             orig_instrument = instrument
             instrument = self._normalize_instrument_name(instrument)
             logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
-
-            # Controleer het soort markt
+            
+            # Controleer of we een gecachede versie hebben
+            cache_key = f"{instrument}_{timeframe}_{fullscreen}"
+            if cache_key in self.chart_cache:
+                cache_time, cached_chart = self.chart_cache[cache_key]
+                # Gebruik de cache alleen als deze nog geldig is
+                if time.time() - cache_time < self.chart_cache_ttl:
+                    logger.info(f"Using cached chart for {instrument}")
+                    return cached_chart
+            
+            # Detecteer het markttype
             market_type = await self._detect_market_type(instrument)
+            logger.info(f"Detected market type for {instrument}: {market_type}")
             
-            # Stel de cache key in
-            cache_key = f"{instrument}_{timeframe}"
-
-            # Controleer of we een TradingView URL hebben voor dit instrument
-            logger.info(f"⚠️ Getting TradingView URL for {instrument}...")
-            tradingview_url = self.get_tradingview_url(instrument, timeframe)
-            if tradingview_url:
-                logger.info(f"✅ Found TradingView URL for {instrument}: {tradingview_url}")
-                
-                # EXTRA DEBUG: Print URL components
-                url_parts = tradingview_url.split('?')
-                if len(url_parts) > 1:
-                    base_url = url_parts[0]
-                    params = url_parts[1].split('&') if len(url_parts) > 1 else []
-                    logger.info(f"🔍 URL Base: {base_url}")
-                    logger.info(f"🔍 URL Params: {params}")
-                    
-                    # Verify session param exists
-                    has_session = any(p.startswith('session=') for p in params)
-                    logger.info(f"🔍 Has session param: {has_session}")
-                    
-                    if not has_session:
-                        logger.warning(f"❌ URL is missing session parameter! This may cause authentication issues.")
-                
-                # Direct call the internal Playwright method if URL exists
-                logger.info(f"🖥️ Attempting TradingView screenshot via Playwright for {instrument}")
-                logger.info(f"🚨 Calling _capture_tradingview_screenshot with URL: {tradingview_url}") # Added this log line
-                screenshot = await self._capture_tradingview_screenshot(tradingview_url, instrument)
-                if screenshot:
-                    # Add explicit size check
-                    size_kb = len(screenshot) / 1024
-                    logger.info(f"✅ Successfully captured tradingview screenshot for {instrument} (Size: {size_kb:.2f} KB)")
-                    if size_kb < 5:
-                        logger.warning(f"⚠️ Screenshot is suspiciously small ({size_kb:.2f} KB). This may indicate a blank or error page.")
-                    return screenshot
-                else:
-                    logger.error(f"❌ Failed to capture tradingview screenshot for {instrument}")
-            else:
-                logger.warning(f"❌ No TradingView URL found for {instrument}")
-
-            # Probeer een chart te genereren met behulp van resterende providers
-            logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
-            
-            # Prioriteit geven aan Direct Yahoo Finance voor echte data
-            direct_yahoo_provider = None
-            for provider in self.chart_providers:
-                if isinstance(provider, DirectYahooProvider):
-                    direct_yahoo_provider = provider
-                    break
-                    
-            if direct_yahoo_provider:
-                try:
-                    logger.info(f"Prioritizing DirectYahooProvider for real chart data for {instrument}")
-                    try:
-                        # We proberen eerst met de DirectYahooProvider, die betere rate limiting heeft
-                        logger.info(f"Attempting to get data from DirectYahooProvider for {instrument}")
-                        
-                        # Direct met asyncio aanroepen in plaats van ThreadPoolExecutor
-                        for provider in self.chart_providers:
-                            if isinstance(provider, DirectYahooProvider):
-                                # Correct aanroepen met 'await'
-                                market_data, indicators = await provider.get_market_data(instrument, timeframe=timeframe)
-                                if market_data is not None and not market_data.empty:
-                                    logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
-                                    metadata = {"provider": "YahooFinance", "market_type": market_type}
-                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                    # Cache de analyse
-                                    self.analysis_cache[cache_key] = (time.time(), analysis)
-                                    return analysis
-                                else:
-                                    logger.warning(f"No market data from DirectYahooProvider for {instrument}")
-                                    break
-                    except Exception as yahoo_err:
-                        logger.error(f"Error getting chart from DirectYahooProvider: {str(yahoo_err)}")
-                except Exception as e:
-                    logger.error(f"Error prioritizing DirectYahooProvider chart: {str(e)}")
-            
-            # Probeer YahooFinanceProvider als fallback
+            # Probeer eerst TradingView screenshot als dat beschikbaar is
             try:
-                for provider in self.chart_providers:
-                    try:
-                        if isinstance(provider, YahooFinanceProvider):
-                            logger.info(f"Trying YahooFinanceProvider as fallback for {instrument}")
-                            result = await provider.get_market_data(instrument, timeframe=timeframe)
-                            
-                            # Check if result is a tuple (DataFrame, Dict) or just DataFrame
-                            if isinstance(result, tuple) and len(result) >= 1:
-                                market_data = result[0]  # Eerste element is DataFrame
-                                metadata_dict = result[1] if len(result) > 1 else {}
-                            else:
-                                market_data = result  # Resultaat is direct de DataFrame
-                                metadata_dict = {}
-                                
-                            if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got market data from YahooFinance fallback for {instrument}")
-                                metadata = {"provider": "YahooFinance", "market_type": market_type}
-                                # Voeg eventuele extra metadata toe
-                                if metadata_dict:
-                                    metadata.update(metadata_dict)
-                                analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                # Cache de analyse
-                                self.analysis_cache[cache_key] = (time.time(), analysis)
-                                return analysis
-                    except Exception as e:
-                        logger.error(f"Error using YahooFinanceProvider: {str(e)}")
-            except Exception as yahoo_error:
-                logger.error(f"Error trying YahooFinanceProvider as fallback: {str(yahoo_error)}")
+                if self.browser_service:
+                    tv_url = self.get_tradingview_url(instrument, timeframe)
+                    logger.info(f"Attempting to get TradingView screenshot for {instrument} from {tv_url}")
+                    chart_bytes = await self._capture_tradingview_screenshot(tv_url, instrument)
+                    if chart_bytes:
+                        logger.info(f"Successfully got TradingView screenshot for {instrument}")
+                        # Cache de chart
+                        self.chart_cache[cache_key] = (time.time(), chart_bytes)
+                        return chart_bytes
+            except Exception as e:
+                logger.error(f"Error getting TradingView screenshot: {str(e)}")
+            
+            # Als we hier komen, is TradingView gefaald, probeer dan een custom chart te maken
+            try:
+                # Zoek naar binance als het crypto is
+                if market_type == "crypto":
+                    for provider in self.chart_providers:
+                        if isinstance(provider, BinanceProvider):
+                            try:
+                                logger.info(f"Attempting to get crypto data from Binance for {instrument}")
+                                market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                                if market_data is not None and not isinstance(market_data, str) and not market_data.empty:
+                                    logger.info(f"Creating chart from Binance data for {instrument}")
+                                    # Genereer custom chart met matplotlib
+                                    chart_bytes = self._generate_custom_chart(market_data, instrument, timeframe, fullscreen)
+                                    if chart_bytes:
+                                        # Cache de chart
+                                        self.chart_cache[cache_key] = (time.time(), chart_bytes)
+                                        return chart_bytes
+                            except Exception as e:
+                                logger.error(f"Error generating chart from Binance data: {str(e)}")
                 
-            # Als all providers hebben gefaald, genereer dan default analysis
-            logger.warning(f"All providers failed for {instrument}, generating default analysis")
-            default_analysis = await self._generate_default_analysis(instrument, timeframe)
-            # Cache de analyse
-            self.analysis_cache[cache_key] = (time.time(), default_analysis)
-            return default_analysis
+                # Probeer met DirectYahooProvider
+                for provider in self.chart_providers:
+                    if isinstance(provider, DirectYahooProvider):
+                        try:
+                            logger.info(f"Attempting to get data from DirectYahooProvider for {instrument}")
+                            market_data, indicators = await provider.get_market_data(instrument, timeframe=timeframe)
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Creating chart from DirectYahooProvider data for {instrument}")
+                                # Genereer custom chart met matplotlib
+                                chart_bytes = self._generate_custom_chart(market_data, instrument, timeframe, fullscreen)
+                                if chart_bytes:
+                                    # Cache de chart
+                                    self.chart_cache[cache_key] = (time.time(), chart_bytes)
+                                    return chart_bytes
+                        except Exception as e:
+                            logger.error(f"Error generating chart from DirectYahooProvider data: {str(e)}")
+                
+                # Probeer met YahooFinanceProvider als fallback
+                for provider in self.chart_providers:
+                    if isinstance(provider, YahooFinanceProvider):
+                        try:
+                            logger.info(f"Attempting to get data from YahooFinanceProvider for {instrument}")
+                            market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Creating chart from YahooFinanceProvider data for {instrument}")
+                                # Genereer custom chart met matplotlib
+                                chart_bytes = self._generate_custom_chart(market_data, instrument, timeframe, fullscreen)
+                                if chart_bytes:
+                                    # Cache de chart
+                                    self.chart_cache[cache_key] = (time.time(), chart_bytes)
+                                    return chart_bytes
+                        except Exception as e:
+                            logger.error(f"Error generating chart from YahooFinanceProvider data: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error in chart generation process: {str(e)}")
+            
+            # Als beide methoden falen, maak een noodgeval chart
+            logger.warning(f"All chart generation methods failed for {instrument}, creating emergency chart")
+            emergency_chart = await self._create_emergency_chart(instrument, timeframe)
+            return emergency_chart
                     
         except Exception as e:
             logger.error(f"Error in get_chart: {str(e)}")
-            logger.error(traceback.format_exc())
-            return f"Error getting chart for {instrument}: {str(e)}"
+            # Maak een emergency chart
+            return await self._create_emergency_chart(instrument, timeframe)
         finally:
             elapsed_time = time.time() - start_time
-            logger.info(f"Chart for {instrument} completed in {elapsed_time:.2f} seconds")
+            logger.info(f"Chart generation for {instrument} completed in {elapsed_time:.2f} seconds")
 
     async def _create_emergency_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
-        """Create an emergency simple chart when all else fails"""
+        """Create an emergency chart with a message when all chart generation methods fail."""
         try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            import io
+            logger.info(f"Creating emergency chart for {instrument}")
             
-            # Create the simplest possible chart
-            plt.figure(figsize=(10, 6))
-            plt.plot(np.random.randn(100).cumsum())
-            plt.title(f"{instrument} - {timeframe} (Emergency Chart)")
-            plt.grid(True)
+            # Maak een lege figuur
+            fig, ax = plt.subplots(figsize=(10, 6))
+            fig.patch.set_facecolor('#1B1B1B')
+            ax.set_facecolor('#1B1B1B')
             
-            # Add timestamp
-            plt.figtext(0.5, 0.01, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                     ha="center", fontsize=8)
+            # Verwijder assen en randen
+            ax.axis('off')
             
-            # Save to bytes
+            # Toon een foutmelding
+            message = f"Kan geen grafiek genereren voor {instrument}\nGeen marktdata beschikbaar\nHet systeem gebruikt geen fallback data."
+            ax.text(0.5, 0.5, message, ha='center', va='center', color='white', fontsize=14)
+            
+            # Converteer naar bytes
             buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            plt.close()
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            plt.close(fig)
             buf.seek(0)
-            
             return buf.getvalue()
         except Exception as e:
-            logger.error(f"Failed to create emergency chart: {str(e)}")
-            # If everything fails, return a static image or create a text-based image
-            # Here we return an empty image since we can't do much more
+            logger.error(f"Error creating emergency chart: {str(e)}")
+            # Als echt alles faalt, geef dan een statisch placeholder image terug
+            chart_placeholder = resource_path("resources/chart_error.png")
+            if os.path.exists(chart_placeholder):
+                with open(chart_placeholder, 'rb') as f:
+                    return f.read()
+            else:
+                # Anders een heel basic image
+                logger.error("Emergency chart placeholder not found")
+                emergency_img = np.ones((400, 600, 3), dtype=np.uint8) * 30
+                cv2.putText(emergency_img, "Chart unavailable", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+                is_success, buffer = cv2.imencode(".png", emergency_img)
+                if is_success:
+                    return buffer.tobytes()
+            
             return b''
 
     async def cleanup(self):
@@ -323,77 +298,39 @@ class ChartService:
             logger.error(f"Error cleaning up chart service: {str(e)}")
 
     async def _generate_fallback_chart(self, instrument: str, timeframe: str) -> bytes:
-        """Generate a simple fallback chart when all other methods fail."""
+        """Generate a fallback chart when real market data is not available.
+        
+        Args:
+            instrument: The instrument symbol
+            timeframe: The timeframe (1h, 4h, 1d)
+            
+        Returns:
+            bytes: The chart image as bytes
+        """
         try:
-            # Create a simple matplotlib chart
-            plt.figure(figsize=(10, 6))
+            logger.warning(f"Generating fallback chart for {instrument}")
             
-            # Generate some random data that resembles a price chart
-            dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
+            # Maak een lege figuur
+            fig, ax = plt.subplots(figsize=(10, 6))
+            fig.patch.set_facecolor('#1B1B1B')
+            ax.set_facecolor('#1B1B1B')
             
-            # Start with a base price appropriate for the instrument
-            base_price = 100
-            if instrument == "EURUSD":
-                base_price = 1.08
-            elif instrument == "GBPUSD":
-                base_price = 1.27
-            elif instrument.startswith("BTC"):
-                base_price = 35000
-            elif instrument.startswith("ETH"):
-                base_price = 1800
-            elif instrument == "XAUUSD":
-                base_price = 2000
-                
-            # Generate a random walk with momentum
-            np.random.seed(int(time.time()) % 1000)  # Different seed each time
-            price_changes = np.random.normal(0, 0.01, 100)
-            momentum = 0.7
-            for i in range(1, len(price_changes)):
-                price_changes[i] = momentum * price_changes[i-1] + (1-momentum) * price_changes[i]
-                
-            # Scale the changes based on the instrument
-            volatility = 0.01
-            if instrument.startswith("BTC"):
-                volatility = 0.03
-            elif instrument == "XAUUSD":
-                volatility = 0.015
-                
-            price_changes *= base_price * volatility
-            prices = base_price + np.cumsum(price_changes)
+            # Verwijder assen en randen
+            ax.axis('off')
             
-            # Plot the data
-            plt.plot(dates, prices, 'b-', linewidth=1.5)
+            # Toon een foutmelding
+            message = f"Kan geen grafiek genereren voor {instrument}\nGeen marktdata beschikbaar\nHet systeem gebruikt geen fallback data."
+            ax.text(0.5, 0.5, message, ha='center', va='center', color='white', fontsize=14)
             
-            # Add some EMAs
-            ema20 = pd.Series(prices).ewm(span=20, adjust=False).mean()
-            ema50 = pd.Series(prices).ewm(span=50, adjust=False).mean()
-            plt.plot(dates, ema20, 'orange', linewidth=1.0, label='EMA 20')
-            plt.plot(dates, ema50, 'red', linewidth=1.0, label='EMA 50')
-            
-            # Add labels and title
-            plt.title(f"{instrument} - {timeframe} Chart (Generated)", fontsize=14)
-            plt.xlabel("Date")
-            plt.ylabel("Price")
-            plt.grid(True, alpha=0.3)
-            plt.legend()
-            
-            # Add disclaimer
-            plt.figtext(0.5, 0.01, "Note: This is a fallback chart and does not represent real market data.",
-                      ha="center", fontsize=8, style="italic", color="gray")
-            
-            # Save to BytesIO
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            plt.close()
-            
-            # Return the bytes
+            # Converteer naar bytes
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            plt.close(fig)
             buf.seek(0)
             return buf.getvalue()
-            
         except Exception as e:
             logger.error(f"Error generating fallback chart: {str(e)}")
-            logger.error(traceback.format_exc())
-            return b''  # Return empty bytes on error
+            return b''
 
     async def generate_chart(self, instrument, timeframe="1h"):
         """Alias for get_chart for backward compatibility"""
@@ -426,18 +363,39 @@ class ChartService:
             return True
 
     def get_fallback_chart(self, instrument: str) -> bytes:
-        """Get a fallback chart image for a specific instrument"""
+        """Get a fallback chart for when all else fails.
+        
+        Args:
+            instrument: The instrument symbol
+            
+        Returns:
+            bytes: A fallback chart image
+        """
         try:
             logger.warning(f"Using fallback chart for {instrument}")
             
-            # Hier zou je een eenvoudige fallback kunnen implementeren
-            # Voor nu gebruiken we de _generate_random_chart methode
-            return asyncio.run(self._generate_random_chart(instrument, "1h"))
+            # Maak een lege figuur
+            fig, ax = plt.subplots(figsize=(10, 6))
+            fig.patch.set_facecolor('#1B1B1B')
+            ax.set_facecolor('#1B1B1B')
             
+            # Verwijder assen en randen
+            ax.axis('off')
+            
+            # Toon een foutmelding
+            message = f"Kan geen grafiek genereren voor {instrument}\nGeen marktdata beschikbaar\nHet systeem gebruikt geen fallback data."
+            ax.text(0.5, 0.5, message, ha='center', va='center', color='white', fontsize=14)
+            
+            # Converteer naar bytes
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            plt.close(fig)
+            buf.seek(0)
+            return buf.getvalue()
         except Exception as e:
-            logger.error(f"Error in fallback chart: {str(e)}")
-            return None
-            
+            logger.error(f"Error getting fallback chart: {str(e)}")
+            return b''
+
     async def _calculate_rsi(self, prices, period=14):
         """Calculate RSI indicator"""
         delta = prices.diff()
@@ -453,104 +411,42 @@ class ChartService:
         return rsi
         
     async def _generate_random_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
-        """Generate a chart with random data as fallback"""
+        """Returns a chart with an error message instead of generating random data.
+        
+        Args:
+            instrument: The instrument symbol
+            timeframe: The timeframe to display
+            
+        Returns:
+            bytes: An error chart image
+        """
         try:
             import matplotlib.pyplot as plt
-            import pandas as pd
-            import numpy as np
             import io
-            from datetime import datetime, timedelta
             
-            logger.info(f"Generating random chart for {instrument} with timeframe {timeframe}")
+            logger.warning(f"Random chart generation requested for {instrument} but generation is disabled")
             
-            # Bepaal de tijdsperiode op basis van timeframe
-            # Gebruik gisteren als einddatum om toekomstige datums te voorkomen
-            end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            # Maak een lege figuur
+            fig, ax = plt.subplots(figsize=(10, 6))
+            fig.patch.set_facecolor('#1B1B1B')
+            ax.set_facecolor('#1B1B1B')
             
-            if timeframe == "1h":
-                start_date = end_date - timedelta(days=7)
-                periods = 168  # 7 dagen * 24 uur
-            elif timeframe == "4h":
-                start_date = end_date - timedelta(days=30)
-                periods = 180  # 30 dagen * 6 periodes per dag
-            elif timeframe == "1d":
-                start_date = end_date - timedelta(days=180)
-                periods = 180
-            else:
-                start_date = end_date - timedelta(days=7)
-                periods = 168
-                
-            logger.info(f"Generated chart date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+            # Verwijder assen en randen
+            ax.axis('off')
             
-            # Genereer wat willekeurige data als voorbeeld
-            np.random.seed(42)  # Voor consistente resultaten
-            dates = pd.date_range(start=start_date, end=end_date, periods=periods)
+            # Toon een foutmelding
+            message = f"Kan geen grafiek genereren voor {instrument}\nGeen marktdata beschikbaar\nHet systeem gebruikt geen fallback data."
+            ax.text(0.5, 0.5, message, ha='center', va='center', color='white', fontsize=14)
             
-            # Genereer OHLC data
-            close = 100 + np.cumsum(np.random.normal(0, 1, periods))
-            high = close + np.random.uniform(0, 3, periods)
-            low = close - np.random.uniform(0, 3, periods)
-            open_price = close - np.random.uniform(-2, 2, periods)
-            
-            # Maak een DataFrame
-            df = pd.DataFrame({
-                'Open': open_price,
-                'High': high,
-                'Low': low,
-                'Close': close
-            }, index=dates)
-            
-            # Bereken enkele indicators
-            df['SMA20'] = df['Close'].rolling(window=20).mean()
-            df['SMA50'] = df['Close'].rolling(window=50).mean()
-            
-            # Maak de chart met aangepaste stijl
-            plt.style.use('dark_background')
-            fig = plt.figure(figsize=(12, 8), facecolor='none')
-            ax = plt.gca()
-            ax.set_facecolor('none')
-            
-            # Plot candlesticks
-            width = 0.6
-            width2 = 0.1
-            up = df[df.Close >= df.Open]
-            down = df[df.Close < df.Open]
-            
-            # Plot up candles
-            plt.bar(up.index, up.High - up.Low, width=width2, bottom=up.Low, color='green', alpha=0.5)
-            plt.bar(up.index, up.Close - up.Open, width=width, bottom=up.Open, color='green')
-            
-            # Plot down candles
-            plt.bar(down.index, down.High - down.Low, width=width2, bottom=down.Low, color='red', alpha=0.5)
-            plt.bar(down.index, down.Open - down.Close, width=width, bottom=down.Close, color='red')
-            
-            # Plot indicators
-            plt.plot(df.index, df['SMA20'], color='blue', label='SMA20')
-            plt.plot(df.index, df['SMA50'], color='orange', label='SMA50')
-            
-            # Voeg labels en titel toe
-            plt.title(f'{instrument} - {timeframe} Chart', fontsize=16, pad=20)
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Price', fontsize=12)
-            plt.grid(True, alpha=0.3)
-            plt.legend()
-            
-            # Verwijder de border
-            plt.gca().spines['top'].set_visible(False)
-            plt.gca().spines['right'].set_visible(False)
-            plt.gca().spines['bottom'].set_visible(False)
-            plt.gca().spines['left'].set_visible(False)
-            
-            # Sla de chart op als bytes met transparante achtergrond
+            # Converteer naar bytes
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', transparent=True)
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            plt.close(fig)
             buf.seek(0)
-            
-            plt.close()
-            
             return buf.getvalue()
+            
         except Exception as e:
-            logger.error(f"Error generating chart: {str(e)}")
+            logger.error(f"Error generating error chart: {str(e)}")
             logger.error(traceback.format_exc())
             return b''
 
@@ -829,12 +725,10 @@ class ChartService:
             except Exception as yahoo_error:
                 logger.error(f"Error trying YahooFinanceProvider as fallback: {str(yahoo_error)}")
                 
-            # Als all providers hebben gefaald, genereer dan default analysis
-            logger.warning(f"All providers failed for {instrument}, generating default analysis")
-            default_analysis = await self._generate_default_analysis(instrument, timeframe)
-            # Cache de analyse
-            self.analysis_cache[cache_key] = (time.time(), default_analysis)
-            return default_analysis
+            # Als alle providers hebben gefaald, geef een foutmelding terug
+            error_message = f"⚠️ Geen marktdata beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data."
+            logger.error(f"All providers failed for {instrument}, returning error message")
+            return error_message
                     
         except Exception as e:
             logger.error(f"Error in get_technical_analysis: {str(e)}")
@@ -843,134 +737,6 @@ class ChartService:
         finally:
             elapsed_time = time.time() - start_time
             logger.info(f"Technical analysis for {instrument} completed in {elapsed_time:.2f} seconds")
-
-    async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
-        """Generate a default technical analysis when other methods fail.
-        
-        Args:
-            instrument: The instrument symbol
-            timeframe: The timeframe (1h, 4h, 1d)
-            
-        Returns:
-            A default technical analysis text
-        """
-        try:
-            # Detect market type
-            market_type = await self._detect_market_type(instrument)
-            
-            # Generate time-specific greeting
-            current_hour = datetime.now().hour
-            if 5 <= current_hour < 12:
-                greeting = "Good morning"
-            elif 12 <= current_hour < 18:
-                greeting = "Good afternoon"
-            else:
-                greeting = "Good evening"
-            
-            # Random sentiment generators
-            sentiments = ["bullish", "bearish", "neutral", "cautiously optimistic", "uncertain"]
-            short_terms = ["short-term", "immediate", "near-term"]
-            timeframes_text = {"1h": "hourly", "4h": "4-hour", "1d": "daily", "1w": "weekly", "1M": "monthly"}
-            tf_text = timeframes_text.get(timeframe, timeframe)
-            
-            # Random analysis components
-            sentiment = random.choice(sentiments)
-            short_term = random.choice(short_terms)
-            
-            # Generate trading ranges (more realistic for the instrument)
-            base_price = 0.0
-            if instrument == "EURUSD":
-                base_price = 1.08 + random.uniform(-0.02, 0.02)
-                price_format = "%.4f"
-                support = round(base_price - random.uniform(0.005, 0.015), 4)
-                resistance = round(base_price + random.uniform(0.005, 0.015), 4)
-            elif instrument == "GBPUSD":
-                base_price = 1.27 + random.uniform(-0.03, 0.03)
-                price_format = "%.4f"
-                support = round(base_price - random.uniform(0.01, 0.02), 4)
-                resistance = round(base_price + random.uniform(0.01, 0.02), 4)
-            elif instrument.startswith("BTC"):
-                base_price = 35000 + random.uniform(-2000, 2000)
-                price_format = "%.1f"
-                support = round(base_price - random.uniform(1000, 2000), 1)
-                resistance = round(base_price + random.uniform(1000, 2000), 1)
-            elif instrument.startswith("ETH"):
-                base_price = 1800 + random.uniform(-100, 100)
-                price_format = "%.1f"
-                support = round(base_price - random.uniform(50, 150), 1)
-                resistance = round(base_price + random.uniform(50, 150), 1)
-            elif instrument == "XAUUSD":
-                base_price = 2000 + random.uniform(-50, 50)
-                price_format = "%.1f"
-                support = round(base_price - random.uniform(10, 30), 1)
-                resistance = round(base_price + random.uniform(10, 30), 1)
-            else:
-                # Default values
-                base_price = 100 + random.uniform(-10, 10)
-                price_format = "%.2f"
-                support = round(base_price - random.uniform(2, 8), 2)
-                resistance = round(base_price + random.uniform(2, 8), 2)
-            
-            # Format all prices
-            current_price = price_format % base_price
-            support_level = price_format % support
-            resistance_level = price_format % resistance
-            
-            # RSI values (random but realistic)
-            rsi_value = random.randint(30, 70)
-            if rsi_value < 40:
-                rsi_condition = "oversold"
-            elif rsi_value > 60:
-                rsi_condition = "overbought"
-            else:
-                rsi_condition = "neutral"
-            
-            # Build analysis text
-            analysis = f"""🔍 **{instrument} {tf_text.title()} Analysis**
-
-{greeting}! The {short_term} outlook for {instrument} appears {sentiment}.
-
-**Current price**: {current_price}
-**Support**: {support_level}
-**Resistance**: {resistance_level}
-**RSI**: {rsi_value} ({rsi_condition})
-
-"""
-            
-            # Add volume statement for stocks and crypto
-            if market_type in ["crypto", "stock"]:
-                volumes = ["above average", "below average", "average", "increasing", "decreasing"]
-                volume_text = random.choice(volumes)
-                analysis += f"**Volume**: {volume_text}\n\n"
-            
-            # Add market-specific conclusions
-            if market_type == "forex":
-                currencies = {
-                    "EURUSD": ("EUR", "USD"),
-                    "GBPUSD": ("GBP", "USD"),
-                    "USDJPY": ("USD", "JPY"),
-                    # Add more as needed
-                }
-                
-                if instrument in currencies:
-                    base, quote = currencies[instrument]
-                    if random.choice([True, False]):
-                        analysis += f"The {base} is showing {random.choice(['strength', 'weakness'])} against the {quote} "
-                        analysis += f"due to recent {random.choice(['economic data', 'central bank comments', 'market sentiment'])}.\n\n"
-                
-            elif market_type == "crypto":
-                factors = ["market sentiment", "Bitcoin dominance", "DeFi activity", "institutional interest", "regulatory news"]
-                selected_factor = random.choice(factors)
-                analysis += f"Current {selected_factor} is a key factor influencing price action.\n\n"
-            
-            # Add a generic disclaimer
-            analysis += "_Note: This analysis is generated from available market data and should not be considered as financial advice._"
-            
-            return analysis
-            
-        except Exception as e:
-            logger.error(f"Error generating default analysis: {str(e)}")
-            return f"⚠️ Technical analysis for {instrument} is temporarily unavailable."
 
     def _normalize_instrument_name(self, instrument: str) -> str:
         """
