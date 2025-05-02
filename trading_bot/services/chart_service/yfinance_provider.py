@@ -20,57 +20,16 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
-# Functie om een betrouwbare huidige datum te krijgen (voorkomt toekomstdatums)
-def get_valid_current_date():
-    """Get a valid current date, ensuring it's not in the future"""
-    now = datetime.now()
-    # Controleer of de datum in een redelijk bereik is (niet in de toekomst)
-    if now.year > 2024:
-        logger.warning(f"Datum lijkt in de toekomst te zijn: {now}. Gebruik alternatieve methode.")
-        
-        # Probeer alternatieve methoden voor het verkrijgen van de huidige datum
-        try:
-            # Methode 1: time.time() en conversie
-            current_time = time.time()
-            alt_now = datetime.fromtimestamp(current_time)
-            
-            if alt_now.year <= 2024:
-                logger.info(f"Alternatieve datum via time.time() lijkt geldig: {alt_now}")
-                return alt_now
-                
-            # Methode 2: time.localtime()
-            t = time.localtime()
-            if t.tm_year <= 2024:
-                alt_now = datetime(t.tm_year, t.tm_mon, t.tm_mday)
-                logger.info(f"Alternatieve datum via time.localtime() lijkt geldig: {alt_now}")
-                return alt_now
-                
-            # Alle methoden geven toekomstdatums
-            logger.warning("Alle datummethoden geven toekomstdatums, val terug op veilige datum")
-            # Gebruik een recente, maar veilige datum
-            return datetime(2024, 5, 3)
-            
-        except Exception as e:
-            logger.error(f"Fout bij het bepalen van alternatieve datum: {e}")
-            # Veilige fallback
-            return datetime(2024, 5, 3)
-    
-    # De datum lijkt geldig
-    return now
-
-# Early validation van systeemdatum
-current_date = get_valid_current_date()
-logger.info(f"Gevalideerde huidige datum voor Yahoo Finance requests: {current_date.strftime('%Y-%m-%d')}")
-
-# Configure retry mechanism
-# ... (retry decorator setup remains the same) ...
+# Extra logging bij het starten van de module
+logger.info("=== Initializing Yahoo Finance Provider ===")
+logger.info(f"yfinance version: {yf.__version__ if hasattr(yf, '__version__') else 'unknown'}")
 
 # --- Cache Configuration ---
 # Cache for raw downloaded data (symbol, interval) -> DataFrame
 # Cache for 5 minutes (300 seconds)
 data_download_cache = TTLCache(maxsize=100, ttl=300) 
 # Cache for processed market data (symbol, timeframe, limit) -> DataFrame with indicators
-market_data_cache = TTLCache(maxsize=100, ttl=300) 
+market_data_cache = TTLCache(maxsize=100, ttl=300)
 
 class YahooFinanceProvider:
     """Provider class for Yahoo Finance API integration"""
@@ -187,33 +146,11 @@ class YahooFinanceProvider:
         wait=wait_exponential(multiplier=1, min=2, max=30), # Adjusted retry wait
         reraise=True
     )
-    async def _download_data(symbol: str, start_date: datetime, end_date: datetime, interval: str, timeout: int = 30, original_symbol: str = None, period: str = None) -> pd.DataFrame:
+    async def _download_data(symbol: str, start_date: datetime = None, end_date: datetime = None, interval: str = None, timeout: int = 30, original_symbol: str = None, period: str = None) -> pd.DataFrame:
         """Download data using yfinance with retry logic and caching."""
-        # --- Caching Logic ---
-        # Fix for future date cache keys - always check and sanitize the cache key
-        def sanitize_cache_key(key):
-            """Ensure cache key doesn't contain future dates"""
-            if not isinstance(key, tuple) or len(key) < 3:
-                return key
-                
-            # Check the third element for date strings
-            date_part = key[2]
-            if isinstance(date_part, str) and date_part.startswith("202"):
-                try:
-                    # Special check for 2025 and beyond
-                    if date_part.startswith("2025") or date_part > "2024-12-31":
-                        logger.warning(f"[Yahoo] Detected future date in cache key: {date_part}")
-                        # Use a dynamic current date
-                        current_dt = get_valid_current_date()
-                        current_date = current_dt.strftime('%Y-%m-%d')
-                        new_key = (key[0], key[1], current_date)
-                        logger.info(f"[Yahoo] Fixed cache key date: {date_part} -> {current_date}")
-                        return new_key
-                except Exception as e:
-                    logger.error(f"[Yahoo] Error sanitizing cache key: {e}")
-            
-            return key
+        logger.info(f"[Yahoo] Starting download for {symbol} with interval={interval}, period={period}")
         
+        # --- Caching Logic ---
         # Cache key should ideally represent the actual request made
         if period:
             # Use period and interval for intraday caching
@@ -224,27 +161,56 @@ class YahooFinanceProvider:
         else:
             # Fallback cache key if parameters are weird (should not happen often)
             logger.warning("Could not determine proper cache key, using fallback.")
-            # Gebruik een dynamische maar geldige huidige datum
-            try:
-                current_dt = get_valid_current_date()
-                current_date = current_dt.strftime('%Y-%m-%d')
-                logger.info(f"[Yahoo] Dynamische huidige datum voor cache key: {current_date}")
-            except Exception as date_e:
-                logger.error(f"[Yahoo] Error getting current date for cache key: {date_e}")
-                # Veilige fallback als alles mislukt
-                current_date = "2024-05-03"
-                
+            # Use today's date for cache key
+            current_date = datetime.now().strftime('%Y-%m-%d')
             cache_key = (symbol, interval, current_date)
-            logger.info(f"[Yahoo] Using fallback cache key with current date: {current_date}")
-
-        cache_key = sanitize_cache_key(cache_key)
+            logger.info(f"[Yahoo] Using current date for cache key: {current_date}")
 
         if cache_key in data_download_cache:
             logger.info(f"[Yahoo Cache] HIT for download: Key={cache_key}")
-            return data_download_cache[cache_key].copy() # Return a copy to prevent mutation
+            df = data_download_cache[cache_key]
+            if df is not None and not df.empty:
+                return df.copy() # Return a copy to prevent mutation
+            else:
+                logger.warning(f"[Yahoo Cache] Invalid cached data for {symbol} (empty or None). Removing from cache.")
+                del data_download_cache[cache_key]
+                
         logger.info(f"[Yahoo Cache] MISS for download: Key={cache_key}")
         # --- End Caching Logic ---
 
+        # Ensure valid dates or period
+        now = get_valid_current_date()
+        
+        # If we're using period, make sure it's valid
+        if period:
+            logger.info(f"[Yahoo] Using period parameter: {period} for {symbol}")
+        # If using dates, validate them
+        else:
+            if end_date is None:
+                end_date = now
+                logger.info(f"[Yahoo] No end_date provided, using current date: {end_date.date()}")
+                
+            if start_date is None:
+                if interval == '1h':
+                    # For hourly data, get ~7 days by default
+                    start_date = end_date - timedelta(days=7)
+                elif interval == '1d':
+                    # For daily data, get ~100 days by default
+                    start_date = end_date - timedelta(days=100)
+                else:
+                    # Default: 30 days
+                    start_date = end_date - timedelta(days=30)
+                logger.info(f"[Yahoo] No start_date provided, using {start_date.date()} (based on interval {interval})")
+                
+            # Make sure dates are valid
+            if end_date > now:
+                logger.warning(f"[Yahoo] End date {end_date.date()} is in the future, using current date")
+                end_date = now
+                
+            if start_date > now or start_date > end_date:
+                logger.warning(f"[Yahoo] Start date {start_date.date()} is invalid, adjusting")
+                start_date = end_date - timedelta(days=30)
+        
         logger.info(f"[Yahoo] Attempting direct download method with yf.download for {symbol} (Interval: {interval}, Period: {period}, Start: {start_date.date() if start_date else 'N/A'}, End: {end_date.date() if end_date else 'N/A'})")
         
         # Ensure session exists
@@ -253,6 +219,9 @@ class YahooFinanceProvider:
         # Function to perform the download (runs in executor)
         def download():
             try:
+                # Add explicit logging
+                logger.info(f"[Yahoo] Executing download for {symbol}, format: {'period' if period else 'start/end'}")
+                
                 # Check if set_tz_session_for_downloading exists (handle different yfinance versions)
                 if hasattr(yf.multi, 'set_tz_session_for_downloading'):
                      yf.multi.set_tz_session_for_downloading(session)
@@ -262,47 +231,49 @@ class YahooFinanceProvider:
                 # Construct download arguments
                 download_kwargs = {
                     'tickers': symbol,
-                    'interval': interval,
                     'progress': False,
                     'session': session,
                     'timeout': timeout,
                     'ignore_tz': False,
                     'threads': False,  # Disable multi-threading to avoid issues
-                    'proxy': None  # Let the session handle proxy settings
+                    'proxy': None,  # Let the session handle proxy settings
+                    'actions': False,  # No need for dividends/splits
+                    'auto_adjust': True,  # Auto-adjust data
+                    'prepost': False,  # No pre/post market data for forex
+                    'rounding': True,  # Round values to appropriate precision
                 }
-                # Use period OR start/end, not both
+                
+                # Voeg het interval toe als het niet None is
+                if interval:
+                    download_kwargs['interval'] = interval
+                
+                # Use period OR start/end, not both - prefer period
                 if period:
                      download_kwargs['period'] = period
-                else:
-                     # Ensure end_date and start_date are set
-                     if 'end_date' not in locals() or end_date is None:
-                         end_date = get_valid_current_date()
-                         logger.warning(f"[Yahoo] End date was not set, defaulting to current date: {end_date.date()}")
-                     
-                     if 'start_date' not in locals() or start_date is None:
-                         start_date = end_date - timedelta(days=30)
-                         logger.warning(f"[Yahoo] Start date was not set, defaulting to 30 days before end: {start_date.date()}")
-                         
-                     # Verify start and end dates are reasonable
-                     now = get_valid_current_date()
-                     
-                     # Make sure end_date is not in the future
-                     if end_date.year > 2024 or end_date > now:
-                         logger.warning(f"[Yahoo] End date {end_date.date()} appears invalid, using current date")
-                         end_date = now
-                         
-                     # Make sure start_date is not in the future and is before end_date
-                     if start_date.year > 2024 or start_date > now or start_date > end_date:
-                         logger.warning(f"[Yahoo] Start date {start_date.date()} is invalid, adjusting as needed")
-                         # Set start date to 30 days before end date
-                         start_date = end_date - timedelta(days=30)
-                     
+                     logger.info(f"[Yahoo] Using period={period} for download")
+                elif start_date is not None and end_date is not None:
                      download_kwargs['start'] = start_date
                      download_kwargs['end'] = end_date
+                     logger.info(f"[Yahoo] Using start={start_date.date()} and end={end_date.date()} for download")
+                else:
+                     # Fallback naar een veilige periode als er geen parameters zijn
+                     download_kwargs['period'] = '7d'  # Standaard 7 dagen
+                     logger.info(f"[Yahoo] Using fallback period=7d for download")
 
-                # Download data
+                # Download data - explicit logging
+                logger.info(f"[Yahoo] Executing yf.download with params: interval={interval}, {'period='+period if period else f'start={start_date.date()}, end={end_date.date()}'}")
                 df = yf.download(**download_kwargs)
+                
+                # Log result summary
+                if df is not None and not df.empty:
+                    logger.info(f"[Yahoo] Download successful, got {len(df)} rows for {symbol}")
+                    logger.info(f"[Yahoo] Data range: {df.index[0]} to {df.index[-1]}")
+                    logger.info(f"[Yahoo] Columns: {df.columns.tolist()}")
+                else:
+                    logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
+                    
                 return df
+                
             except Exception as e:
                  logger.error(f"[Yahoo] Error during yf.download for {symbol}: {str(e)}")
                  # Check for 429 error specifically
@@ -360,206 +331,55 @@ class YahooFinanceProvider:
             instrument: The instrument symbol to determine appropriate decimal precision
         """
         if df is None or df.empty:
-            logger.warning("[Validation] Input DataFrame is None or empty, no validation possible")
-            return df
-            
-        try:
-            # Initial diagnostics (Keep basic shape log)
-            logger.info(f"[Validation] Starting data validation with shape: {df.shape}")
-            # logger.info(f"[Validation] Original columns: {df.columns}")
-            # logger.info(f"[Validation] Index type: {type(df.index).__name__}")
-            # logger.info(f"[Validation] Index range: {df.index[0]} to {df.index[-1]}" if len(df) > 0 else "[Validation] Empty index")
-
-            # Check for NaN values in the original data
-            nan_counts = df.isna().sum()
-            # if nan_counts.sum() > 0:
-            #     logger.warning(f"[Validation] Found NaN values in original data: {nan_counts.to_dict()}")
-
-            # Check if we have a multi-index dataframe from yfinance
-            if isinstance(df.columns, pd.MultiIndex):
-                # logger.info(f"[Validation] Detected MultiIndex columns with levels: {[name for name in df.columns.names]}")
-                # logger.info(f"[Validation] First level values: {df.columns.get_level_values(0).unique().tolist()}")
-                # logger.info(f"[Validation] Second level values: {df.columns.get_level_values(1).unique().tolist()}")
-                
-                # Convert multi-index format to standard format
-                result = pd.DataFrame()
-                
-                # Extract each price column
-                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                    if (col, df.columns.get_level_values(1)[0]) in df.columns:
-                        result[col] = df[(col, df.columns.get_level_values(1)[0])]
-                        # logger.info(f"[Validation] Extracted {col} from MultiIndex")
-                    # else: # Log errors only if column is truly missing
-                    #     logger.error(f"[Validation] Column {col} not found in multi-index")
-                        
-                # Replace original dataframe with converted one
-                if not result.empty:
-                    # logger.info(f"[Validation] Successfully converted multi-index to: {result.columns}")
-                    df = result
-                else:
-                    logger.error("[Validation] Failed to convert multi-index dataframe, returning empty DataFrame")
-                    return pd.DataFrame()
-            
-            # Ensure we have the required columns
-            required_columns = ['Open', 'High', 'Low', 'Close']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                logger.error(f"[Validation] Required columns missing: {missing_columns}")
-                logger.info(f"[Validation] Available columns: {df.columns}")
-                return pd.DataFrame()
-            
-            # Report initial data statistics (COMMENTED OUT)
-            # logger.info(f"[Validation] Data statistics before cleaning:")
-            # for col in required_columns:
-            #     try:
-            #         stats = {
-            #             'min': df[col].min(),
-            #             'max': df[col].max(),
-            #             'mean': df[col].mean(),
-            #             'null_count': df[col].isnull().sum()
-            #         }
-            #         logger.info(f"[Validation] {col}: {stats}")
-            #     except Exception as stats_e:
-            #         logger.error(f"[Validation] Error calculating stats for {col}: {str(stats_e)}")
-            
-            # Remove any duplicate indices
-            dupes_count = df.index.duplicated().sum()
-            if dupes_count > 0:
-                # logger.warning(f"[Validation] Found {dupes_count} duplicate indices, removing duplicates")
-                df = df[~df.index.duplicated(keep='last')]
-            # else:
-                # logger.info("[Validation] No duplicate indices found")
-            
-            # Forward fill missing values (max 2 periods)
-            null_before = df.isnull().sum().sum()
-            df = df.ffill(limit=2)
-            null_after = df.isnull().sum().sum()
-            # if null_before > 0:
-                # logger.info(f"[Validation] Forward-filled {null_before - null_after} NaN values (limit=2)")
-            
-            # Remove rows with any remaining NaN values
-            row_count_before_nan = len(df)
-            df = df.dropna()
-            row_count_after_nan = len(df)
-            # if row_count_after_nan < row_count_before_nan:
-                # logger.warning(f"[Validation] Dropped {row_count_before_nan - row_count_after_nan} rows with NaN values")
-            
-            # Ensure all numeric columns are float
-            for col in df.columns:
-                try:
-                    # Use recommended approach to avoid SettingWithCopyWarning if possible
-                    # df[col] = pd.to_numeric(df[col], errors='coerce')
-                    # If direct assignment causes issues, use the original approach with warning suppression
-                    with pd.option_context('mode.chained_assignment', None):
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-                    nan_after_conversion = df[col].isna().sum()
-                    # if nan_after_conversion > 0:
-                        # logger.warning(f"[Validation] Converting {col} to numeric created {nan_after_conversion} NaN values")
-                except Exception as conv_e:
-                    logger.error(f"[Validation] Error converting {col} to numeric: {str(conv_e)}")
-            
-            # Check for remaining NaN values after numeric conversion
-            if df.isna().sum().sum() > 0:
-                # logger.warning(f"[Validation] Still have NaN values after numeric conversion: {df.isna().sum().to_dict()}")
-                # Drop rows with NaN values again
-                row_count_before_nan2 = len(df)
-                df = df.dropna()
-                row_count_after_nan2 = len(df)
-                # logger.warning(f"[Validation] Dropped additional {row_count_before_nan2 - row_count_after_nan2} rows with NaN values")
-            
-            # Validate price relationships - only keep rows with valid OHLC relationships (COMMENTED OUT)
-            # row_count_before_ohlc = len(df)
-            # valid_rows = (
-            #     (df['High'] >= df['Low']) &
-            #     (df['High'] >= df['Open']) &
-            #     (df['High'] >= df['Close']) &
-            #     (df['Low'] <= df['Open']) &
-            #     (df['Low'] <= df['Close'])
-            # )
-
-            # Log invalid row counts by condition (COMMENTED OUT)
-            # if not valid_rows.all():
-                # invalid_count = (~valid_rows).sum()
-                # logger.warning(f"[Validation] Found {invalid_count} rows with invalid OHLC relationships")
-                
-                # Detailed diagnostics of invalid rows (COMMENTED OUT)
-                # condition_results = {
-                #     'High < Low': (df['High'] < df['Low']).sum(),
-                #     'High < Open': (df['High'] < df['Open']).sum(),
-                #     'High < Close': (df['High'] < df['Close']).sum(),
-                #     'Low > Open': (df['Low'] > df['Open']).sum(),
-                #     'Low > Close': (df['Low'] > df['Close']).sum()
-                # }
-                # logger.warning(f"[Validation] Invalid relationship details: {condition_results}")
-                
-                # Show an example of an invalid row (COMMENTED OUT)
-                # if invalid_count > 0:
-                    # try:
-                        # invalid_idx = (~valid_rows).idxmax()
-                        # logger.warning(f"[Validation] Example invalid row at {invalid_idx}: {df.loc[invalid_idx, ['Open', 'High', 'Low', 'Close']].to_dict()}")
-                    # except Exception as e:
-                        # logger.error(f"[Validation] Error showing invalid row example: {str(e)}")
-            
-            # df = df[valid_rows] # Keep the filter commented out for now
-            # row_count_after_ohlc = len(df)
-            # if row_count_after_ohlc < row_count_before_ohlc:
-                # logger.warning(f"[Validation] Removed {row_count_before_ohlc - row_count_after_ohlc} rows with invalid OHLC relationships")
-            
-            # Also validate Volume if it exists
-            if 'Volume' in df.columns:
-                row_count_before_vol = len(df)
-                df = df[df['Volume'] >= 0]
-                row_count_after_vol = len(df)
-                # if row_count_after_vol < row_count_before_vol:
-                    # logger.warning(f"[Validation] Removed {row_count_before_vol - row_count_after_vol} rows with negative Volume")
-            
-            # Apply correct decimal precision based on instrument type if provided
-            if instrument:
-                try:
-                    # Get the appropriate precision for this instrument
-                    precision = YahooFinanceProvider._get_instrument_precision(instrument)
-                    # logger.info(f"[Validation] Using {precision} decimal places for {instrument}")
+            logger.warning(f"[Yahoo] Download for {symbol} returned empty DataFrame")
+            market_data_cache[cache_key] = None
+            return None, None
                     
-                    # Apply precision to price columns
-                    price_columns = ['Open', 'High', 'Low', 'Close']
-                    for col in price_columns:
-                        if col in df.columns:
-                            # Round the values to the appropriate precision
-                            # This ensures the data is displayed with the correct number of decimal places
-                            # Use recommended approach to avoid SettingWithCopyWarning if possible
-                            # df[col] = df[col].round(precision)
-                            # If direct assignment causes issues, use the original approach with warning suppression
-                            with pd.option_context('mode.chained_assignment', None):
-                                 df[col] = df[col].round(precision)
-                except Exception as e:
-                    logger.error(f"[Validation] Error applying precision for {instrument}: {str(e)}")
-            
-            # Final data statistics (COMMENTED OUT)
-            # logger.info(f"[Validation] Final validated DataFrame shape: {df.shape}")
-            # if len(df) > 0:
-                # logger.info(f"[Validation] Date range: {df.index[0]} to {df.index[-1]}")
+        # Log success and data shape before validation
+        logger.info(f"[Yahoo] Successfully downloaded data for {symbol} with shape {df.shape}")
                 
-                # Log final statistics for key columns (COMMENTED OUT)
-                # for col in required_columns:
-                    # if col in df.columns:
-                        # try:
-                            # stats = {
-                                # 'min': df[col].min(),
-                                # 'max': df[col].max(),
-                                # 'mean': df[col].mean(),
-                            # }
-                            # logger.info(f"[Validation] Final {col} statistics: {stats}")
-                        # except Exception as stats_e:
-                            # logger.error(f"[Validation] Error calculating final stats for {col}: {str(stats_e)}")
+        # Validate and clean the data - basic validation
+        try:
+            # Check for MultiIndex kolommen (gebruikelijk bij Yahoo Finance)
+            if isinstance(df.columns, pd.MultiIndex):
+                logger.info(f"[Yahoo] Converting MultiIndex columns to standard format")
+                # Maak een nieuwe DataFrame met de juiste kolomnamen
+                standard_df = pd.DataFrame()
+                # Pak de eerste level 1 waarde (meestal de ticker symbol)
+                ticker_col = df.columns.get_level_values(1)[0]
+                
+                # Kopieer de belangrijke kolommen
+                for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if (col, ticker_col) in df.columns:
+                        standard_df[col] = df[(col, ticker_col)]
+                        
+                if not standard_df.empty:
+                    df = standard_df
+                else:
+                    logger.error(f"[Yahoo] Could not convert MultiIndex, columns: {df.columns}")
+                    market_data_cache[cache_key] = None
+                    return None, None
+                    
+            # Zorg dat de vereiste kolommen aanwezig zijn
+            required_cols = ['Open', 'High', 'Low', 'Close']
+            if not all(col in df.columns for col in required_cols):
+                logger.error(f"[Yahoo] Missing required columns for {symbol}. Available: {df.columns.tolist()}")
+                market_data_cache[cache_key] = None
+                return None, None
+                
+            # Verwijder duplicate indices en NaN waarden
+            if df.index.duplicated().sum() > 0:
+                df = df[~df.index.duplicated(keep='last')]
+                
+            # Verwijder NaN waarden
+            df = df.dropna()
             
-            return df
-            
-        except Exception as e:
-            logger.error(f"[Validation] Error in data validation: {str(e)}")
-            logger.error(f"[Validation] Error type: {type(e).__name__}")
+            logger.info(f"[Yahoo] Validation successful, shape after cleaning: {df.shape}")
+        except Exception as validate_e:
+            logger.error(f"[Yahoo] Error validating data: {validate_e}")
             logger.error(traceback.format_exc())
-            return df # Return original df on validation error? Or None? Consider implications.
+            market_data_cache[cache_key] = None
+            return None, None
 
     @staticmethod
     def _map_timeframe_to_yfinance(timeframe: str) -> Optional[str]:
@@ -662,50 +482,20 @@ class YahooFinanceProvider:
         Fetches market data from Yahoo Finance for a FIXED timeframe (H1), validates it, and calculates indicators.
         Returns a tuple: (DataFrame with indicators, analysis_info dictionary)
         """
-        # Verify system date to detect any anomalies early
+        # Verifieer systeemdatum, maar gebruik gewoon vaste periodes
         try:
-            current_dt = get_valid_current_date()
-            logger.info(f"[Yahoo] Huidige gevalideerde datum voor request: {current_dt.strftime('%Y-%m-%d')}")
+            logger.info(f"[Yahoo] Fetching market data for {symbol} (limit: {limit})")
         except Exception as date_check_e:
-            logger.error(f"[Yahoo] Error validating current date: {date_check_e}")
+            logger.error(f"[Yahoo] Error in initial check: {date_check_e}")
             
         # <<< FIXED TIMEFRAME >>>
         fixed_timeframe = "H1" 
         # <<< END FIXED TIMEFRAME >>>
 
-        cache_key = (symbol, fixed_timeframe, limit) # Use fixed_timeframe in cache key
-        
-        # Sanitize cache key to prevent future dates
-        def sanitize_cache_key(key):
-            """Ensure cache key doesn't contain future dates"""
-            if not isinstance(key, tuple) or len(key) < 3:
-                return key
-                
-            # Check if any element has a future date string
-            for elem in key:
-                if isinstance(elem, str) and elem.startswith("202"):
-                    try:
-                        # Special check for 2025 and beyond
-                        if elem.startswith("2025") or elem > "2024-12-31":
-                            logger.warning(f"[Yahoo] Detected future date in market cache key: {elem}")
-                            # Dynamic current date
-                            current_dt = get_valid_current_date()
-                            current_date = current_dt.strftime('%Y-%m-%d')
-                            # Create new key with all elements (just in case)
-                            if len(key) == 3 and isinstance(key[2], str) and key[2].startswith("202"):
-                                new_key = (key[0], key[1], current_date)
-                            else:
-                                # Just return original if we're not sure how to fix
-                                new_key = key
-                            logger.info(f"[Yahoo] Fixed market cache key date: {elem} -> {current_date}")
-                            return new_key
-                    except Exception as e:
-                        logger.error(f"[Yahoo] Error sanitizing market cache key: {e}")
-            
-            return key
-            
-        cache_key = sanitize_cache_key(cache_key)
-
+        # Genereer een cache key die niet afhankelijk is van datum
+        # We gebruiken alleen symbol, timeframe en limit (geen datums)
+        cache_key = (symbol, fixed_timeframe, limit)
+ 
         if cache_key in market_data_cache:
             logger.info(f"[Yahoo Cache] HIT for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
             cached_result = market_data_cache[cache_key]
@@ -737,60 +527,31 @@ class YahooFinanceProvider:
                  logger.error(f"[Yahoo] Could not map fixed timeframe '{fixed_timeframe}' to yfinance interval.")
                  return None, None
 
-            # 2. Determine date range or period and download data
-            end_date = YahooFinanceProvider._get_reliable_date()
-            
-            # Ensure we're not requesting data from the future
-            if end_date.hour == 0 and end_date.minute < 5:
-                # Subtract a day if it's very early in the day to be safe
-                end_date = end_date - timedelta(days=1)
-                logger.info(f"[Yahoo] Adjusted end date to previous day to avoid future data requests: {end_date.date()}")
-                
-            yf_period = None
-            start_date = None
-
-            # Use 'period' for intraday intervals (< 1d) for better reliability
-            if 'm' in yf_interval or 'h' in yf_interval:
-                # Calculate period string (e.g., '729d' for 1h to stay within limit)
-                yf_period = YahooFinanceProvider._calculate_period_for_interval(yf_interval, limit)
-                logger.info(f"[Yahoo] Using period='{yf_period}' for interval '{yf_interval}'")
-                
-                # Double check and sanitize period
-                if isinstance(yf_period, str) and 'd' in yf_period:
-                    try:
-                        # Extract number of days
-                        days = int(yf_period.replace('d', ''))
-                        # Cap at reasonable limit to prevent unusually large requests
-                        if days > 730:  # About 2 years
-                            logger.warning(f"[Yahoo] Period days too large: {days}, capping at 730 days")
-                            yf_period = "730d"
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"[Yahoo] Error parsing period days: {e}, using default '7d'")
-                        yf_period = "7d"
-            elif yf_interval: # For daily or longer, use start/end date
-                approx_days_str = YahooFinanceProvider._calculate_period_for_interval(yf_interval, limit) # Use helper to get approx days needed
-                try:
-                     required_days = int(approx_days_str) # Period calculation now returns days as int
-                except ValueError:
-                     logger.warning(f"Could not parse days from {approx_days_str}, defaulting to 365")
-                     required_days = 365
-                start_date = end_date - timedelta(days=required_days)
-                logger.info(f"[Yahoo] Using start='{start_date.date()}', end='{end_date.date()}' for interval '{yf_interval}'")
-            else: # Fallback if interval mapping failed
-                 logger.error(f"[Yahoo] Invalid yfinance interval '{yf_interval}'. Cannot fetch data.")
-                 market_data_cache[cache_key] = None # Cache None result
-                 return None, None # Return tuple
+            # 2. ALLEEN period gebruiken, geen datums (veel betrouwbaarder)
+            # Bereken de juiste periode voor het interval
+            if yf_interval == '1h':
+                # Voor 1h data, gebruik 7d (ongeveer 168 uur aan data)
+                yf_period = '7d'
+                logger.info(f"[Yahoo] Using fixed period '{yf_period}' for interval '{yf_interval}'")
+            elif yf_interval == '1d':
+                # Voor dagelijkse data, gebruik 6mo (ongeveer 180 dagen)
+                yf_period = '6mo'
+                logger.info(f"[Yahoo] Using fixed period '{yf_period}' for interval '{yf_interval}'")
+            else:
+                # Fallback
+                yf_period = '1mo'
+                logger.info(f"[Yahoo] Using fallback period '{yf_period}' for interval '{yf_interval}'")
 
             # Wait for rate limit
             await YahooFinanceProvider._wait_for_rate_limit()
             
             try:
                 # Download the data from Yahoo Finance using the cached downloader
+                # ALLEEN PERIOD meegeven, geen start_date/end_date!
                 df = await YahooFinanceProvider._download_data(
-                    formatted_symbol, 
-                    start_date,
-                    end_date,
-                    yf_interval,
+                    formatted_symbol,
+                    interval=yf_interval,
+                    period=yf_period,
                     timeout=30,
                     original_symbol=symbol
                 )
@@ -804,26 +565,62 @@ class YahooFinanceProvider:
                 logger.info(f"[Yahoo] Successfully downloaded data for {symbol} with shape {df.shape}")
                 
                 # Validate and clean the data
-                df_validated = YahooFinanceProvider._validate_and_clean_data(df.copy(), symbol) # Validate a copy
-
-                if df_validated is None or df_validated.empty:
-                     logger.warning(f"[Yahoo] Data validation failed or resulted in empty DataFrame for {symbol}")
-                     market_data_cache[cache_key] = None # Cache None result
-                     return None, None # Return tuple
+                # Hier gebruiken we onze vereenvoudigde validatiefunctie
+                try:
+                    # Check for MultiIndex kolommen (gebruikelijk bij Yahoo Finance)
+                    if isinstance(df.columns, pd.MultiIndex):
+                        logger.info(f"[Yahoo] Converting MultiIndex columns to standard format")
+                        # Maak een nieuwe DataFrame met de juiste kolomnamen
+                        standard_df = pd.DataFrame()
+                        # Pak de eerste level 1 waarde (meestal de ticker symbol)
+                        ticker_col = df.columns.get_level_values(1)[0]
+                        
+                        # Kopieer de belangrijke kolommen
+                        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                            if (col, ticker_col) in df.columns:
+                                standard_df[col] = df[(col, ticker_col)]
+                                
+                        if not standard_df.empty:
+                            df = standard_df
+                        else:
+                            logger.error(f"[Yahoo] Could not convert MultiIndex, columns: {df.columns}")
+                            market_data_cache[cache_key] = None
+                            return None, None
+                            
+                    # Zorg dat de vereiste kolommen aanwezig zijn
+                    required_cols = ['Open', 'High', 'Low', 'Close']
+                    if not all(col in df.columns for col in required_cols):
+                        logger.error(f"[Yahoo] Missing required columns for {symbol}. Available: {df.columns.tolist()}")
+                        market_data_cache[cache_key] = None
+                        return None, None
+                        
+                    # Verwijder duplicate indices en NaN waarden
+                    if df.index.duplicated().sum() > 0:
+                        df = df[~df.index.duplicated(keep='last')]
+                        
+                    # Verwijder NaN waarden
+                    df = df.dropna()
+                    
+                    logger.info(f"[Yahoo] Validation successful, shape after cleaning: {df.shape}")
+                except Exception as validate_e:
+                    logger.error(f"[Yahoo] Error validating data: {validate_e}")
+                    logger.error(traceback.format_exc())
+                    market_data_cache[cache_key] = None
+                    return None, None
 
                 # For 4h timeframe, resample from 1h
                 if fixed_timeframe == "4h" and yf_interval == "1h": # Ensure we fetched 1h data
                     logger.info(f"[Yahoo] Resampling 1h data to 4h for {symbol}")
                     try:
                         # Ensure index is datetime before resampling
-                        if not isinstance(df_validated.index, pd.DatetimeIndex):
-                             df_validated.index = pd.to_datetime(df_validated.index)
+                        if not isinstance(df.index, pd.DatetimeIndex):
+                             df.index = pd.to_datetime(df.index)
                              
                         # Ensure timezone information exists (UTC is common) for resampling
-                        if df_validated.index.tz is None:
-                           df_validated = df_validated.tz_localize('UTC')
+                        if df.index.tz is None:
+                           df = df.tz_localize('UTC')
                         else:
-                           df_validated = df_validated.tz_convert('UTC') # Convert to UTC if needed
+                           df = df.tz_convert('UTC') # Convert to UTC if needed
 
                         # Define resampling logic
                         resample_logic = {
@@ -833,31 +630,31 @@ class YahooFinanceProvider:
                             'Close': 'last',
                             'Volume': 'sum'
                         }
-                        # Filter out columns not present in df_validated
-                        resample_logic = {k: v for k, v in resample_logic.items() if k in df_validated.columns}
+                        # Filter out columns not present in df
+                        resample_logic = {k: v for k, v in resample_logic.items() if k in df.columns}
 
-                        df_resampled = df_validated.resample('4H', label='right', closed='right').agg(resample_logic)
+                        df_resampled = df.resample('4H', label='right', closed='right').agg(resample_logic)
                         df_resampled.dropna(inplace=True) # Drop rows where any value is NaN (often first row after resample)
                         
                         if df_resampled.empty:
                              logger.warning(f"[Yahoo] Resampling to 4h resulted in empty DataFrame for {symbol}. Using 1h data instead.")
-                             # Stick with df_validated (1h) if resampling fails
+                             # Stick with df (1h) if resampling fails
                         else:
-                             df_validated = df_resampled # Use the resampled data
-                             logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df_validated.shape}")
+                             df = df_resampled # Use the resampled data
+                             logger.info(f"[Yahoo] Successfully resampled to 4h with shape {df.shape}")
                              
                     except Exception as resample_e:
                         logger.error(f"[Yahoo] Error resampling to 4h: {str(resample_e)}")
-                        # Continue with 1h data (df_validated) if resampling fails
+                        # Continue with 1h data (df) if resampling fails
                 
                 # Ensure we have enough data *before* limiting for indicators
-                if len(df_validated) < limit: # Check if we have enough historical data
-                     logger.warning(f"[Yahoo] Insufficient data after cleaning/resampling for {symbol} (got {len(df_validated)}, needed ~{limit}). Indicators might be inaccurate.")
+                if len(df) < limit: # Check if we have enough historical data
+                     logger.warning(f"[Yahoo] Insufficient data after cleaning/resampling for {symbol} (got {len(df)}, needed ~{limit}). Indicators might be inaccurate.")
                      # Potentially return None or handle differently if strict data requirement
                      # For now, proceed but log warning.
 
                 # --- Calculate indicators BEFORE limiting ---
-                df_with_indicators = df_validated.copy() # Work on a copy
+                df_with_indicators = df.copy() # Work on a copy
                 indicators = {}
                 
                 try:
@@ -1089,35 +886,29 @@ class YahooFinanceProvider:
             if not interval:
                 logger.error(f"Invalid timeframe: {timeframe}")
                 return None
-                
-            # Determine start date based on timeframe
-            end_date = YahooFinanceProvider._get_reliable_date()
             
-            # Ensure we're not requesting data from the future
-            if end_date.hour == 0 and end_date.minute < 5:
-                # Subtract a day if it's very early in the day to be safe
-                end_date = end_date - timedelta(days=1)
-                logger.info(f"[Yahoo] Adjusted end date to previous day to avoid future data requests: {end_date.date()}")
-            
-            # How many candles to show
-            num_candles = 100
-            if timeframe == "1h":
-                start_date = end_date - timedelta(days=7)  # A week of hourly data
-            elif timeframe == "4h":
-                start_date = end_date - timedelta(days=30)  # A month of 4-hour data
-            elif timeframe == "1d":
-                start_date = end_date - timedelta(days=200)  # 200 days of daily data
+            # Gebruik een vaste period parameter op basis van timeframe
+            # Dit vermijdt problemen met datums
+            if timeframe == "1h" or interval == "1h":
+                period = "7d"  # Een week voor uurgegevens
+            elif timeframe == "4h" or interval == "4h":
+                period = "30d"  # Een maand voor 4-uursgegevens
+            elif timeframe == "1d" or interval == "1d":
+                period = "6mo"  # Zes maanden voor dagelijkse gegevens
             else:
-                start_date = end_date - timedelta(days=30)  # Default to a month
+                period = "1mo"  # Standaard een maand
+                
+            logger.info(f"Getting data for chart: {yahoo_symbol} with interval={interval} and period={period}")
             
-            # Get the data
-            logger.info(f"Getting data for chart: {yahoo_symbol} ({interval}) from {start_date.date()} to {end_date.date()}")
+            # Get the data met period in plaats van start/end date
             data = yf.download(
                 yahoo_symbol,
-                start=start_date,
-                end=end_date,
                 interval=interval,
-                progress=False
+                period=period,
+                progress=False,
+                actions=False,
+                auto_adjust=True,
+                threads=False
             )
             
             if data.empty:
@@ -1125,7 +916,7 @@ class YahooFinanceProvider:
                 return None
                 
             # Limit to the last 'num_candles' for better visualization
-            data = data.tail(num_candles)
+            data = data.tail(100)
             
             # Generate a nice looking chart with matplotlib
             logger.info(f"Generating matplotlib chart for {instrument} with {len(data)} rows")
@@ -1192,5 +983,5 @@ class YahooFinanceProvider:
 
     @staticmethod
     def _get_reliable_date():
-        """Krijg een betrouwbare huidige datum voor Yahoo Finance requests"""
-        return get_valid_current_date()
+        """Get a date for reference purposes"""
+        return datetime.now()
