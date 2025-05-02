@@ -1692,73 +1692,33 @@ The percentages MUST add up to 100%, and the formatted text MUST include all sec
             return 'forex'  # Default to forex
     
     def _get_mock_sentiment_data(self, instrument: str) -> Dict[str, Any]:
-        """Returns an error message instead of generating mock sentiment data"""
-        logger.warning(f"Mock sentiment data requested for {instrument} but generation is disabled")
+        """Return error message instead of generating mock sentiment data."""
+        logger.warning(f"Requested sentiment data for {instrument} but no real data is available.")
+        current_time = datetime.now().isoformat()
         
-        # Error message instead of mock data
-        analysis_text = f"""<b>⚠️ Sentiment Analysis Unavailable</b>
-
-No real sentiment data is available for {instrument}. The system does not use fallback data.
-
-Please try again later when real-time data providers are accessible.
-"""
-        
-        # Create a data structure with error information
         return {
-            'overall_sentiment': 'unknown',
-            'sentiment_score': 0,
-            'bullish': 0,
-            'bearish': 0,
-            'neutral': 0,
-            'bullish_percentage': 0,
-            'bearish_percentage': 0,
-            'technical_score': 'N/A',
-            'news_score': 'N/A',
-            'social_score': 'N/A',
-            'trend_strength': 'N/A',
-            'volatility': 'N/A',
-            'volume': 'N/A',
-            'support_level': 'N/A',
-            'resistance_level': 'N/A',
-            'recommendation': 'Real-time data currently unavailable.',
-            'analysis': analysis_text,
-            'news_headlines': ["No real-time data available"],
-            'source': 'error'
+            "instrument": instrument,
+            "timestamp": current_time,
+            "error": True,
+            "message": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "sentiment_text": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "overall_sentiment": "unknown",
+            "source": "error"
         }
-    
+
     def _get_fallback_sentiment(self, instrument: str) -> Dict[str, Any]:
-        """Returns an error message instead of generating fallback sentiment data"""
-        logger.warning(f"Fallback sentiment data requested for {instrument} but generation is disabled")
+        """Return error message instead of using fallback sentiment data."""
+        logger.warning(f"Fallback sentiment requested for {instrument} but no real data is available.")
+        current_time = datetime.now().isoformat()
         
-        # Error message
-        analysis_text = f"""<b>⚠️ Sentiment Analysis Unavailable</b>
-
-No real sentiment data is available for {instrument}. The system does not use fallback data.
-
-Please try again later when real-time data providers are accessible.
-"""
-        
-        # Return error data structure
         return {
-            'overall_sentiment': 'unknown',
-            'sentiment_score': 0,
-            'bullish': 0,
-            'bearish': 0,
-            'neutral': 0,
-            'bullish_percentage': 0,
-            'bearish_percentage': 0,
-            'technical_score': 'N/A',
-            'news_score': 'N/A',
-            'social_score': 'N/A',
-            'trend_strength': 'N/A',
-            'volatility': 'N/A',
-            'volume': 'N/A',
-            'support_level': 'N/A',
-            'resistance_level': 'N/A',
-            'recommendation': 'Real-time data currently unavailable.',
-            'analysis': analysis_text,
-            'news_headlines': ["No real-time data available"],
-            'source': 'error'
+            "instrument": instrument,
+            "timestamp": current_time,
+            "error": True,
+            "message": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "sentiment_text": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "overall_sentiment": "unknown",
+            "source": "error"
         }
 
     async def _get_alternative_news(self, instrument: str, market: str) -> str:
