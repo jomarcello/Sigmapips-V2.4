@@ -65,6 +65,13 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV DISPLAY=:99
 
+# Stel custom environment variables in
+ENV TRADINGVIEW_SESSION_ID=z90l85p2anlgdwfppsrdnnfantz48z1o
+# Zorg dat echte marktdata wordt gebruikt, geen fallback
+ENV ALWAYS_USE_DEFAULT_ANALYSIS=false
+ENV USE_SIMPLE_TA_FORMAT=false
+ENV PREFER_REAL_MARKET_DATA=true
+
 # Installeer Playwright-specifieke dependencies
 # Bijgewerkte versies voor Debian Bookworm
 RUN apt-get update && apt-get install -y \
