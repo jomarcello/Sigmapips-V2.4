@@ -27,7 +27,6 @@ import tempfile
 from trading_bot.services.chart_service.base import TradingViewService
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
-from trading_bot.services.chart_service.rapidapi_yahoo_provider import RapidapiYahooProvider
 from trading_bot.services.chart_service.direct_yahoo_provider import DirectYahooProvider
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,6 @@ class ChartService:
             self.chart_providers = [
                 BinanceProvider(),      # Eerst Binance voor crypto's
                 DirectYahooProvider(),  # Direct Yahoo Finance implementation via yfinance library
-                RapidapiYahooProvider(), # Dan RapidAPI Yahoo Finance als backup 
                 YahooFinanceProvider(), # Yahoo Finance als fallback via yfinance
             ]
             
@@ -136,7 +134,7 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            logging.info("Chart service initialized with providers: Binance, DirectYahoo, RapidAPI Yahoo, YahooFinance")
+            logging.info("Chart service initialized with providers: Binance, DirectYahoo, YahooFinance")
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
@@ -737,197 +735,112 @@ class ChartService:
             return None
 
     async def get_technical_analysis(self, instrument: str, timeframe: str = "1h") -> str:
-        """Generate technical analysis for a specific instrument and timeframe."""
+        """Get technical analysis for a specific instrument and timeframe."""
+        start_time = time.time()
+        logger.info(f"🔍 Getting technical analysis for {instrument} with timeframe {timeframe}")
+        
         try:
-            logger.info(f"Generating technical analysis for {instrument} {timeframe}")
-            
-            # Controleren of we standaardanalyse moeten gebruiken of echte data
-            use_default = os.environ.get("ALWAYS_USE_DEFAULT_ANALYSIS", "").lower() == "true"
-            use_simple_format = os.environ.get("USE_SIMPLE_TA_FORMAT", "").lower() == "true"
+            # Controleren of we echte data moeten forceren
             prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
             
-            # Als we expliciet fallback willen, gebruik die
-            if use_default or use_simple_format:
-                logger.info(f"Using default analysis format for {instrument} due to environment setting")
-                return await self._generate_default_analysis(instrument, timeframe)
-                
-            # Normaliseer instrument naam
+            # Normaliseer het instrument
+            orig_instrument = instrument
             instrument = self._normalize_instrument_name(instrument)
-                
-            cache_key = f"{instrument}_{timeframe}_analysis"
+            logger.info(f"Normalized instrument name from {orig_instrument} to {instrument}")
             
-            # Check cache first
+            # Controleer of we data in de cache hebben
+            cache_key = f"{instrument}_{timeframe}"
             if cache_key in self.analysis_cache:
-                cache_time, analysis = self.analysis_cache[cache_key]
+                cache_time, cached_analysis = self.analysis_cache[cache_key]
                 if time.time() - cache_time < self.analysis_cache_ttl:
-                    logger.info(f"Found technical analysis in cache for {instrument}")
-                    return analysis
+                    logger.info(f"Using cached analysis for {instrument}")
+                    return cached_analysis
             
-            # Detect market type
-            logger.info(f"Detecting market type for {instrument}")
+            # Controleer het soort markt 
             market_type = await self._detect_market_type(instrument)
-            logger.info(f"Detected market type: {market_type} for {instrument}")
             
-            # Try DirectYahooProvider first for real market data
-            if prefer_real_data:
-                try:
-                    logger.info(f"Prioritizing real market data from DirectYahooProvider for {instrument}")
-                    direct_yahoo_provider = None
-                    for provider in self.chart_providers:
-                        if isinstance(provider, DirectYahooProvider):
-                            direct_yahoo_provider = provider
-                            break
-                    
-                    if direct_yahoo_provider:
-                        try:
-                            # Use ThreadPoolExecutor to avoid asyncio issues
-                            from concurrent.futures import ThreadPoolExecutor
-                            import asyncio
-                            
-                            def get_direct_yahoo_data():
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    return loop.run_until_complete(direct_yahoo_provider.get_market_data(instrument))
-                                finally:
-                                    loop.close()
-                            
-                            # Execute asyncio code in a thread
-                            with ThreadPoolExecutor() as executor:
-                                market_data, metadata = executor.submit(get_direct_yahoo_data).result()
-                                
-                            if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
-                                if hasattr(self, '_generate_analysis_from_data'):
-                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                    # Cache the result
-                                    self.analysis_cache[cache_key] = (time.time(), analysis)
-                                    return analysis
-                        except Exception as yahoo_err:
-                            logger.error(f"Error getting data from DirectYahooProvider: {str(yahoo_err)}")
-                            # Fall back to other providers if DirectYahooProvider fails
-                except Exception as e:
-                    logger.error(f"Error prioritizing DirectYahooProvider: {str(e)}")
-                    
-                # If DirectYahooProvider failed, try RapidAPI as a backup
-                try:
-                    logger.info(f"Trying RapidapiYahooProvider as backup for {instrument}")
-                    rapidapi_provider = None
-                    for provider in self.chart_providers:
-                        if isinstance(provider, RapidapiYahooProvider):
-                            rapidapi_provider = provider
-                            break
-                    
-                    if rapidapi_provider:
-                        try:
-                            # Gebruik ThreadPoolExecutor om asyncio problemen te omzeilen
-                            from concurrent.futures import ThreadPoolExecutor
-                            import asyncio
-                            
-                            def get_rapidapi_data():
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    return loop.run_until_complete(rapidapi_provider.get_market_data(instrument))
-                                finally:
-                                    loop.close()
-                            
-                            # Voer asyncio code uit in een thread
-                            with ThreadPoolExecutor() as executor:
-                                market_data, metadata = executor.submit(get_rapidapi_data).result()
-                                
-                            if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got REAL market data from RapidapiYahooProvider for {instrument}")
-                                if hasattr(self, '_generate_analysis_from_data'):
-                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                    # Cache the result
-                                    self.analysis_cache[cache_key] = (time.time(), analysis)
-                                    return analysis
-                        except Exception as rapidapi_error:
-                            logger.error(f"Error getting data from RapidapiYahooProvider: {str(rapidapi_error)}")
-                except Exception as e:
-                    logger.error(f"Error trying RapidapiYahooProvider as backup: {str(e)}")
-            
-            # Try providers based on market type
-            logger.info(f"Trying appropriate providers for {instrument} based on market type: {market_type}")
-            
+            # Als het een crypto is, eerst Binance proberen
             for provider in self.chart_providers:
                 try:
-                    # Skip Binance for non-crypto instruments
-                    if isinstance(provider, BinanceProvider) and market_type != 'crypto':
-                        logger.info(f"Skipping BinanceProvider for non-crypto instrument {instrument}")
-                        continue
-                    
-                    logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
-                    
-                    if hasattr(provider, "get_market_data"):
-                        if isinstance(provider, YahooFinanceProvider):
-                            # Both providers have async methods but are used in a mix of async/non-async
-                            # Run the async method in the event loop directly
-                            try:
-                                loop = asyncio.get_event_loop()
-                                market_data, metadata = loop.run_until_complete(provider.get_market_data(instrument))
-                                if market_data is not None and not market_data.empty:
-                                    logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
-                                    if hasattr(self, '_generate_analysis_from_data'):
-                                        analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                        # Cache the result
-                                        self.analysis_cache[cache_key] = (time.time(), analysis)
-                                        return analysis
-                            except RuntimeError as re:
-                                # Handle "cannot be called from a running event loop" error
-                                if "running event loop" in str(re):
-                                    logger.warning(f"Detected running event loop issue with {provider.__class__.__name__}: {str(re)}")
-                                    # Use a thread to run the operation instead
-                                    try:
-                                        from concurrent.futures import ThreadPoolExecutor
-                                        with ThreadPoolExecutor() as executor:
-                                            future = asyncio.run_coroutine_threadsafe(
-                                                provider.get_market_data(instrument),
-                                                asyncio.get_event_loop()
-                                            )
-                                            market_data, metadata = future.result(timeout=30)  # 30s timeout
-                                            if market_data is not None and not market_data.empty:
-                                                logger.info(f"Successfully got market data with {provider.__class__.__name__} thread for {instrument}")
-                                                if hasattr(self, '_generate_analysis_from_data'):
-                                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                                    # Cache the result
-                                                    self.analysis_cache[cache_key] = (time.time(), analysis)
-                                                    return analysis
-                                    except Exception as thread_err:
-                                        logger.error(f"Thread execution error for {provider.__class__.__name__}: {str(thread_err)}")
-                                else:
-                                    # Not a running event loop error, re-raise
-                                    raise
-                        else:
-                            # For other non-Yahoo providers
-                            market_data, metadata = await provider.get_market_data(instrument)
-                            if market_data is not None and not market_data.empty:
-                                logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
-                                if hasattr(self, '_generate_analysis_from_data'):
-                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
-                                    # Cache the result
-                                    self.analysis_cache[cache_key] = (time.time(), analysis)
-                                    return analysis
+                    if isinstance(provider, BinanceProvider) and market_type == "crypto":
+                        logger.info(f"Attempting to get crypto data from Binance for {instrument}")
+                        market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                        if market_data is not None and not market_data.empty:
+                            logger.info(f"Successfully got market data from Binance for {instrument}")
+                            metadata = {"provider": "Binance", "market_type": market_type}
+                            analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                            # Cache de analyse
+                            self.analysis_cache[cache_key] = (time.time(), analysis)
+                            return analysis
                 except Exception as e:
-                    error_type = type(e).__name__
-                    logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
-                    logger.error(f"Error type: {error_type}")
+                    logger.error(f"Error getting data from Binance: {str(e)}")
             
-            # Only if all providers failed and prefer_real_data is false, use fallback
-            if not prefer_real_data:
-                logger.warning(f"All providers failed for {market_type} {instrument}, using {market_type}-specific methods")
-                return await self._generate_default_analysis(instrument, timeframe)
-            else:
-                error_msg = f"❌ **Error**: Geen actuele marktdata beschikbaar voor {instrument}. Alle providers hebben gefaald. Probeer het later opnieuw."
-                logger.error(f"All providers failed for {instrument} and fallback is disabled")
-                return error_msg
-
+            # Probeer met DirectYahooProvider (heeft beste rate limiting)
+            try:
+                # We proberen eerst met de DirectYahooProvider, die betere rate limiting heeft
+                logger.info(f"Attempting to get data from DirectYahooProvider for {instrument}")
+                import concurrent.futures
+                
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    # Definieer functie om DirectYahooProvider data op te halen
+                    def get_direct_yahoo_data():
+                        for provider in self.chart_providers:
+                            if isinstance(provider, DirectYahooProvider):
+                                market_data = provider.get_market_data(instrument, timeframe=timeframe)
+                                if market_data is not None and not market_data.empty:
+                                    metadata = {"provider": "YahooFinance", "market_type": market_type}
+                                    return market_data, metadata
+                        return None, None
+                    
+                    # Probeer DirectYahooProvider data op te halen
+                    market_data, metadata = executor.submit(get_direct_yahoo_data).result()
+                    
+                    if market_data is not None and not market_data.empty:
+                        logger.info(f"Successfully got REAL market data from DirectYahooProvider for {instrument}")
+                        analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                        # Cache de analyse
+                        self.analysis_cache[cache_key] = (time.time(), analysis)
+                        return analysis
+                    else:
+                        logger.warning(f"No market data from DirectYahooProvider for {instrument}")
+                        
+            except Exception as e:
+                logger.error(f"Error getting data from DirectYahooProvider: {str(e)}")
+            
+            # Probeer YahooFinanceProvider als fallback
+            try:
+                for provider in self.chart_providers:
+                    try:
+                        if isinstance(provider, YahooFinanceProvider):
+                            logger.info(f"Trying YahooFinanceProvider as fallback for {instrument}")
+                            market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Successfully got market data from YahooFinance fallback for {instrument}")
+                                metadata = {"provider": "YahooFinance", "market_type": market_type}
+                                analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                # Cache de analyse
+                                self.analysis_cache[cache_key] = (time.time(), analysis)
+                                return analysis
+                    except Exception as e:
+                        logger.error(f"Error using YahooFinanceProvider: {str(e)}")
+            except Exception as yahoo_error:
+                logger.error(f"Error trying YahooFinanceProvider as fallback: {str(yahoo_error)}")
+                
+            # Als all providers hebben gefaald, genereer dan default analysis
+            logger.warning(f"All providers failed for {instrument}, generating default analysis")
+            default_analysis = await self._generate_default_analysis(instrument, timeframe)
+            # Cache de analyse
+            self.analysis_cache[cache_key] = (time.time(), default_analysis)
+            return default_analysis
+                    
         except Exception as e:
-            logger.error(f"Error getting technical analysis for {instrument}: {str(e)}")
-            logger.error(f"Traceback (most recent call last):\n{traceback.format_exc()}")
-            return f"⚠️ Technical analysis for {instrument} is temporarily unavailable due to a technical issue."
-            
+            logger.error(f"Error in get_technical_analysis: {str(e)}")
+            logger.error(traceback.format_exc())
+            return f"Error getting technical analysis for {instrument}: {str(e)}"
+        finally:
+            elapsed_time = time.time() - start_time
+            logger.info(f"Technical analysis for {instrument} completed in {elapsed_time:.2f} seconds")
+
     async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
         """Generate a default technical analysis when other methods fail.
         
