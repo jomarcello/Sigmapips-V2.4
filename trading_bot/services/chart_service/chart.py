@@ -244,10 +244,22 @@ class ChartService:
                     try:
                         if isinstance(provider, YahooFinanceProvider):
                             logger.info(f"Trying YahooFinanceProvider as fallback for {instrument}")
-                            market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                            result = await provider.get_market_data(instrument, timeframe=timeframe)
+                            
+                            # Check if result is a tuple (DataFrame, Dict) or just DataFrame
+                            if isinstance(result, tuple) and len(result) >= 1:
+                                market_data = result[0]  # Eerste element is DataFrame
+                                metadata_dict = result[1] if len(result) > 1 else {}
+                            else:
+                                market_data = result  # Resultaat is direct de DataFrame
+                                metadata_dict = {}
+                                
                             if market_data is not None and not market_data.empty:
                                 logger.info(f"Successfully got market data from YahooFinance fallback for {instrument}")
                                 metadata = {"provider": "YahooFinance", "market_type": market_type}
+                                # Voeg eventuele extra metadata toe
+                                if metadata_dict:
+                                    metadata.update(metadata_dict)
                                 analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                                 # Cache de analyse
                                 self.analysis_cache[cache_key] = (time.time(), analysis)
@@ -740,10 +752,22 @@ class ChartService:
                 try:
                     if isinstance(provider, BinanceProvider) and market_type == "crypto":
                         logger.info(f"Attempting to get crypto data from Binance for {instrument}")
-                        market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                        result = await provider.get_market_data(instrument, timeframe=timeframe)
+                        
+                        # Check if result is a tuple (DataFrame, Dict) or just DataFrame
+                        if isinstance(result, tuple) and len(result) >= 1:
+                            market_data = result[0]  # Eerste element is DataFrame
+                            metadata_dict = result[1] if len(result) > 1 else {}
+                        else:
+                            market_data = result  # Resultaat is direct de DataFrame
+                            metadata_dict = {}
+                            
                         if market_data is not None and not market_data.empty:
                             logger.info(f"Successfully got market data from Binance for {instrument}")
                             metadata = {"provider": "Binance", "market_type": market_type}
+                            # Voeg eventuele extra metadata toe
+                            if metadata_dict:
+                                metadata.update(metadata_dict)
                             analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                             # Cache de analyse
                             self.analysis_cache[cache_key] = (time.time(), analysis)
@@ -780,10 +804,22 @@ class ChartService:
                     try:
                         if isinstance(provider, YahooFinanceProvider):
                             logger.info(f"Trying YahooFinanceProvider as fallback for {instrument}")
-                            market_data = await provider.get_market_data(instrument, timeframe=timeframe)
+                            result = await provider.get_market_data(instrument, timeframe=timeframe)
+                            
+                            # Check if result is a tuple (DataFrame, Dict) or just DataFrame
+                            if isinstance(result, tuple) and len(result) >= 1:
+                                market_data = result[0]  # Eerste element is DataFrame
+                                metadata_dict = result[1] if len(result) > 1 else {}
+                            else:
+                                market_data = result  # Resultaat is direct de DataFrame
+                                metadata_dict = {}
+                                
                             if market_data is not None and not market_data.empty:
                                 logger.info(f"Successfully got market data from YahooFinance fallback for {instrument}")
                                 metadata = {"provider": "YahooFinance", "market_type": market_type}
+                                # Voeg eventuele extra metadata toe
+                                if metadata_dict:
+                                    metadata.update(metadata_dict)
                                 analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
                                 # Cache de analyse
                                 self.analysis_cache[cache_key] = (time.time(), analysis)
