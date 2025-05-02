@@ -146,6 +146,9 @@ class ChartService:
         start_time = time.time()
         logger.info(f"🔍 [CHART FLOW START] Getting chart for {instrument} with timeframe {timeframe}")
         
+        # Controleren of we echte data moeten forceren
+        prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
+        
         # Controleer of de service is geïnitialiseerd
         if not hasattr(self, 'chart_providers') or not self.chart_providers:
             logger.error("Chart service not initialized")
@@ -195,6 +198,29 @@ class ChartService:
 
         # Probeer een chart te genereren met behulp van resterende providers
         logger.info(f"Attempting to generate chart with remaining providers for {instrument}") # UPDATED LOG
+        
+        # Prioriteit geven aan Yahoo Finance voor echte data
+        yahoo_provider = None
+        for provider in self.chart_providers:
+            if isinstance(provider, YahooFinanceProvider):
+                yahoo_provider = provider
+                break
+                
+        if yahoo_provider:
+            try:
+                logger.info(f"Prioritizing YahooFinanceProvider for real chart data for {instrument}")
+                try:
+                    # YahooFinanceProvider.get_chart is een static method en geen coroutine
+                    chart_bytes = YahooFinanceProvider.get_chart(instrument, timeframe, fullscreen)
+                    if chart_bytes and len(chart_bytes) > 1000:  # Controleer of het een geldige afbeelding is
+                        logger.info(f"Successfully got REAL chart data from YahooFinance for {instrument}")
+                        return chart_bytes
+                except Exception as yahoo_err:
+                    logger.error(f"Error getting chart from YahooFinance: {str(yahoo_err)}")
+            except Exception as e:
+                logger.error(f"Error prioritizing YahooFinance chart: {str(e)}")
+        
+        # Probeer alle andere providers
         for provider in self.chart_providers:
             try:
                 logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
@@ -233,9 +259,15 @@ class ChartService:
                 if hasattr(e, '__traceback__'):
                     logger.error(traceback.format_exc())
 
-        # Probeer een fallback chart te genereren
-        logger.warning(f"All providers failed for {instrument}, using fallback chart")
-        return await self._generate_fallback_chart(instrument, timeframe)
+        # Als alle providers zijn gefaald en de gebruiker echte data wil, gebruik dan geen fallback
+        if prefer_real_data:
+            logger.error(f"All chart providers failed for {instrument} and fallback is disabled")
+            # Return een lege byte string - de aanroeper moet dit controleren
+            return b''
+        else:
+            # Probeer een fallback chart te genereren
+            logger.warning(f"All providers failed for {instrument}, using fallback chart")
+            return await self._generate_fallback_chart(instrument, timeframe)
 
     async def _create_emergency_chart(self, instrument: str, timeframe: str = "1h") -> bytes:
         """Create an emergency simple chart when all else fails"""
@@ -679,6 +711,20 @@ class ChartService:
         """Generate technical analysis for a specific instrument and timeframe."""
         try:
             logger.info(f"Generating technical analysis for {instrument} {timeframe}")
+            
+            # Controleren of we standaardanalyse moeten gebruiken of echte data
+            use_default = os.environ.get("ALWAYS_USE_DEFAULT_ANALYSIS", "").lower() == "true"
+            use_simple_format = os.environ.get("USE_SIMPLE_TA_FORMAT", "").lower() == "true"
+            prefer_real_data = os.environ.get("PREFER_REAL_MARKET_DATA", "").lower() == "true"
+            
+            # Als we expliciet fallback willen, gebruik die
+            if use_default or use_simple_format:
+                logger.info(f"Using default analysis format for {instrument} due to environment setting")
+                return await self._generate_default_analysis(instrument, timeframe)
+                
+            # Normaliseer instrument naam
+            instrument = self._normalize_instrument_name(instrument)
+                
             cache_key = f"{instrument}_{timeframe}_analysis"
             
             # Check cache first
@@ -692,6 +738,47 @@ class ChartService:
             logger.info(f"Detecting market type for {instrument}")
             market_type = await self._detect_market_type(instrument)
             logger.info(f"Detected market type: {market_type} for {instrument}")
+            
+            # Try YahooFinanceProvider first for real market data
+            if prefer_real_data:
+                try:
+                    logger.info(f"Prioritizing real market data from YahooFinanceProvider for {instrument}")
+                    # Probeer direct Yahoo Finance te gebruiken voor echte marktdata
+                    yahoo_provider = None
+                    for provider in self.chart_providers:
+                        if isinstance(provider, YahooFinanceProvider):
+                            yahoo_provider = provider
+                            break
+                    
+                    if yahoo_provider:
+                        try:
+                            # Gebruik ThreadPoolExecutor om asyncio problemen te omzeilen
+                            from concurrent.futures import ThreadPoolExecutor
+                            import asyncio
+                            
+                            def get_yahoo_data():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    return loop.run_until_complete(yahoo_provider.get_market_data(instrument))
+                                finally:
+                                    loop.close()
+                            
+                            # Voer asyncio code uit in een thread
+                            with ThreadPoolExecutor() as executor:
+                                market_data, metadata = executor.submit(get_yahoo_data).result()
+                                
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Successfully got REAL market data from YahooFinance for {instrument}")
+                                if hasattr(self, '_generate_analysis_from_data'):
+                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                    # Cache the result
+                                    self.analysis_cache[cache_key] = (time.time(), analysis)
+                                    return analysis
+                        except Exception as yahoo_error:
+                            logger.error(f"Error getting data from YahooFinance: {str(yahoo_error)}")
+                except Exception as e:
+                    logger.error(f"Error prioritizing YahooFinance: {str(e)}")
             
             # Try providers based on market type
             logger.info(f"Trying appropriate providers for {instrument} based on market type: {market_type}")
@@ -759,16 +846,19 @@ class ChartService:
                     logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
                     logger.error(f"Error type: {error_type}")
             
-            # If all providers failed, use some fallback methods based on market type
-            logger.warning(f"All providers failed for {market_type} {instrument}, using {market_type}-specific methods")
-            
-            # Generate default fallback analysis for this instrument type
-            return await self._generate_default_analysis(instrument, timeframe)
+            # Only if all providers failed and prefer_real_data is false, use fallback
+            if not prefer_real_data:
+                logger.warning(f"All providers failed for {market_type} {instrument}, using {market_type}-specific methods")
+                return await self._generate_default_analysis(instrument, timeframe)
+            else:
+                error_msg = f"❌ **Error**: Geen actuele marktdata beschikbaar voor {instrument}. Alle providers hebben gefaald. Probeer het later opnieuw."
+                logger.error(f"All providers failed for {instrument} and fallback is disabled")
+                return error_msg
 
         except Exception as e:
             logger.error(f"Error getting technical analysis for {instrument}: {str(e)}")
             logger.error(f"Traceback (most recent call last):\n{traceback.format_exc()}")
-            return f"⚠️ Technical analysis for {instrument} is temporarily unavailable."
+            return f"⚠️ Technical analysis for {instrument} is temporarily unavailable due to a technical issue."
             
     async def _generate_default_analysis(self, instrument: str, timeframe: str) -> str:
         """Generate a default technical analysis when other methods fail.
