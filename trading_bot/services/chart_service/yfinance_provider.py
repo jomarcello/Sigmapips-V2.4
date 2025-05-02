@@ -179,7 +179,7 @@ class YahooFinanceProvider:
         # --- End Caching Logic ---
 
         # Ensure valid dates or period
-        now = get_valid_current_date()
+        now = YahooFinanceProvider._get_reliable_date()
         
         # If we're using period, make sure it's valid
         if period:
