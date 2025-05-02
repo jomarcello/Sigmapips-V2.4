@@ -214,18 +214,25 @@ class DirectYahooProvider:
         return timeframe_map.get(timeframe, "1mo")  # Default to 1 month if not found
 
     @staticmethod
-    async def get_market_data(symbol: str, limit: int = 100) -> Optional[Tuple[pd.DataFrame, Dict]]:
+    async def get_market_data(symbol: str, timeframe: str = "1h", limit: int = 100) -> Optional[Tuple[pd.DataFrame, Dict]]:
         """
         Fetches market data from Yahoo Finance, validates it, and calculates indicators.
-        Returns a tuple: (DataFrame with indicators, analysis_info dictionary)
+        
+        Args:
+            symbol: The instrument symbol to fetch data for
+            timeframe: The timeframe for the data (e.g., 1h, 4h, 1d)
+            limit: The maximum number of data points to return
+            
+        Returns:
+            A tuple: (DataFrame with indicators, analysis_info dictionary)
         """
         try:
-            logger.info(f"[YFinance] Fetching market data for {symbol} (limit: {limit})")
+            logger.info(f"[YFinance] Fetching market data for {symbol} (timeframe: {timeframe}, limit: {limit})")
         except Exception as e:
             logger.error(f"[YFinance] Error in initial check: {e}")
             
-        # Using fixed timeframe of H1 (1 hour)
-        fixed_timeframe = "H1" 
+        # Use the provided timeframe instead of a fixed one
+        fixed_timeframe = timeframe
         
         # Generate cache key based on symbol, timeframe and limit
         cache_key = (symbol, fixed_timeframe, limit)
@@ -249,7 +256,7 @@ class DirectYahooProvider:
                 
         logger.info(f"[YFinance Cache] MISS for market data: {symbol} timeframe {fixed_timeframe} limit {limit}")
 
-        logger.info(f"[YFinance] Getting market data for {symbol} on fixed {fixed_timeframe} timeframe")
+        logger.info(f"[YFinance] Getting market data for {symbol} on timeframe {fixed_timeframe}")
         df = None
         analysis_info = {}
 
@@ -260,7 +267,7 @@ class DirectYahooProvider:
             period = DirectYahooProvider._map_timeframe_to_period(fixed_timeframe)
 
             if not interval:
-                 logger.error(f"[YFinance] Could not map fixed timeframe '{fixed_timeframe}' to Yahoo Finance interval.")
+                 logger.error(f"[YFinance] Could not map timeframe '{fixed_timeframe}' to Yahoo Finance interval.")
                  return None, None
                  
             # Download data using yfinance
