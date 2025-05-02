@@ -23,19 +23,15 @@ import re
 import glob
 import tempfile
 
-# Importeer alleen de base class
+# Import base class en providers
 from trading_bot.services.chart_service.base import TradingViewService
-# Import providers
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
-from trading_bot.services.chart_service.alphavantage_provider import AlphaVantageProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
 from trading_bot.services.chart_service.rapidapi_yahoo_provider import RapidapiYahooProvider
 from trading_bot.services.chart_service.direct_yahoo_provider import DirectYahooProvider
-# AllTickProvider import removed as we never use it
 
 logger = logging.getLogger(__name__)
 
-# Verwijder alle Yahoo Finance gerelateerde constanten
 OCR_CACHE_DIR = os.path.join('data', 'cache', 'ocr')
 
 # JSON Encoder voor NumPy types
@@ -70,8 +66,6 @@ class ChartService:
                 DirectYahooProvider(),  # Direct Yahoo Finance implementation via yfinance library
                 RapidapiYahooProvider(), # Dan RapidAPI Yahoo Finance als backup 
                 YahooFinanceProvider(), # Yahoo Finance als fallback via yfinance
-                # AlphaVantageProvider removed because we're replacing it with direct Yahoo Finance
-                # AllTickProvider is removed as we never use it and it causes recursion errors
             ]
             
             # Initialiseer de chart links met de specifieke TradingView links
@@ -229,37 +223,62 @@ class ChartService:
         # Probeer alle andere providers
         for provider in self.chart_providers:
             try:
+                # Skip Binance for non-crypto instruments
+                if isinstance(provider, BinanceProvider) and market_type != 'crypto':
+                    logger.info(f"Skipping BinanceProvider for non-crypto instrument {instrument}")
+                    continue
+                
                 logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                 
-                # Special handling for DirectYahooProvider
-                if isinstance(provider, DirectYahooProvider):
-                    # Already tried as priority provider, skip
-                    continue
-                # Special handling for YahooFinanceProvider
-                elif isinstance(provider, YahooFinanceProvider):
-                    # IMPORTANT: Call the static get_chart method directly and not as a coroutine
-                    # YahooFinanceProvider.get_chart is not an async method
-                    logger.info(f"Using direct static YahooFinanceProvider.get_chart for {instrument}")
-                    try:
-                        chart_bytes = YahooFinanceProvider.get_chart(instrument, timeframe, fullscreen)
-                        if chart_bytes and len(chart_bytes) > 1000:  # Ensure it's not empty or too small
-                            logger.info(f"Successfully generated chart with YahooFinanceProvider for {instrument}")
-                            return chart_bytes
-                        else:
-                            logger.warning(f"YahooFinanceProvider returned too small image for {instrument}: {len(chart_bytes) if chart_bytes else 0} bytes")
-                    except Exception as yahoo_err:
-                        logger.error(f"YahooFinanceProvider.get_chart error: {str(yahoo_err)}")
-                        logger.error(traceback.format_exc())
-                else:
-                    # For other providers that might have instance methods
-                    if hasattr(provider, 'get_chart'):
-                        logger.info(f"Calling async get_chart on {provider.__class__.__name__} for {instrument}")
-                        chart_bytes = await provider.get_chart(instrument, timeframe)
-                        if chart_bytes:
-                            logger.info(f"Successfully got chart with {provider.__class__.__name__} for {instrument}")
-                            return chart_bytes
+                if hasattr(provider, "get_market_data"):
+                    if isinstance(provider, YahooFinanceProvider):
+                        # Provider has async methods but is used in a mix of async/non-async
+                        # Run the async method in the event loop directly
+                        try:
+                            loop = asyncio.get_event_loop()
+                            market_data, metadata = loop.run_until_complete(provider.get_market_data(instrument))
+                            if market_data is not None and not market_data.empty:
+                                logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
+                                if hasattr(self, '_generate_analysis_from_data'):
+                                    analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                    # Cache the result
+                                    self.analysis_cache[cache_key] = (time.time(), analysis)
+                                    return analysis
+                        except RuntimeError as re:
+                            # Handle "cannot be called from a running event loop" error
+                            if "running event loop" in str(re):
+                                logger.warning(f"Detected running event loop issue with {provider.__class__.__name__}: {str(re)}")
+                                # Use a thread to run the operation instead
+                                try:
+                                    from concurrent.futures import ThreadPoolExecutor
+                                    with ThreadPoolExecutor() as executor:
+                                        future = asyncio.run_coroutine_threadsafe(
+                                            provider.get_market_data(instrument),
+                                            asyncio.get_event_loop()
+                                        )
+                                        market_data, metadata = future.result(timeout=30)  # 30s timeout
+                                        if market_data is not None and not market_data.empty:
+                                            logger.info(f"Successfully got market data with {provider.__class__.__name__} thread for {instrument}")
+                                            if hasattr(self, '_generate_analysis_from_data'):
+                                                analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                                # Cache the result
+                                                self.analysis_cache[cache_key] = (time.time(), analysis)
+                                                return analysis
+                                except Exception as thread_err:
+                                    logger.error(f"Thread execution error for {provider.__class__.__name__}: {str(thread_err)}")
+                            else:
+                                # Not a running event loop error, re-raise
+                                raise
                     else:
-                        logger.error(f"Provider {provider.__class__.__name__} does not have a get_chart method")
+                        # For other non-Yahoo providers
+                        market_data, metadata = await provider.get_market_data(instrument)
+                        if market_data is not None and not market_data.empty:
+                            logger.info(f"Successfully got market data with {provider.__class__.__name__} for {instrument}")
+                            if hasattr(self, '_generate_analysis_from_data'):
+                                analysis = self._generate_analysis_from_data(instrument, timeframe, market_data, metadata)
+                                # Cache the result
+                                self.analysis_cache[cache_key] = (time.time(), analysis)
+                                return analysis
             except Exception as e:
                 error_type = type(e).__name__
                 logger.error(f"Error with provider {provider.__class__.__name__} for {instrument}: {str(e)}")
@@ -842,7 +861,7 @@ class ChartService:
                     logger.info(f"Trying provider {provider.__class__.__name__} for {instrument}")
                     
                     if hasattr(provider, "get_market_data"):
-                        if isinstance(provider, YahooFinanceProvider) or isinstance(provider, AlphaVantageProvider):
+                        if isinstance(provider, YahooFinanceProvider):
                             # Both providers have async methods but are used in a mix of async/non-async
                             # Run the async method in the event loop directly
                             try:
