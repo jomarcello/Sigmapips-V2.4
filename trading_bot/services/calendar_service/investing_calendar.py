@@ -208,164 +208,26 @@ class InvestingCalendarServiceImpl():
         try:
             # In een echte implementatie zou hier code staan om actuele data op te halen
             # We simuleren hier dat de data ophalen werkt en geven een lijst met events terug
-            # die overeenkomt met de Investing.com data voor 15 april 2025
             
             # Check huidige datum
             today = datetime.datetime.now()
             logger.info(f"Fetching news for date: {today.strftime('%Y-%m-%d')}")
             
-            # Als het 15 april 2025 is, gebruik dan de officiële data
-            if today.year == 2025 and today.month == 4 and today.day == 15:
-                base_timestamp = datetime.datetime.combine(today.date(), datetime.time.min).timestamp()
-                
-                # Volledige lijst van events voor 15 april 2025 van Investing.com
-                return [
-                    {
-                        'timestamp': base_timestamp + 0 * 3600,  # 00:00
-                        'country': 'United States',
-                        'impact': 3,  # High
-                        'name': 'Fed Waller Speaks',
-                        'type': 'speech'
-                    },
-                    {
-                        'timestamp': base_timestamp + 5 * 3600,  # 05:00
-                        'country': 'United States',
-                        'impact': 3,  # High
-                        'name': 'FOMC Member Harker Speaks',
-                        'type': 'speech'
-                    },
-                    {
-                        'timestamp': base_timestamp + 5.75 * 3600,  # 05:45
-                        'country': 'New Zealand',
-                        'impact': 2,  # Medium
-                        'name': 'FPI (MoM) (Mar)',
-                        'type': 'release',
-                        'fore': '',
-                        'prev': '-0.5%',
-                        'bold': '0.5%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 6 * 3600 + 1 * 60,  # 06:01
-                        'country': 'United Kingdom',
-                        'impact': 2,  # Medium
-                        'name': 'BRC Retail Sales Monitor (YoY) (Mar)',
-                        'type': 'release',
-                        'fore': '0.7%',
-                        'prev': '0.9%',
-                        'bold': '0.9%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 6.67 * 3600,  # 06:40
-                        'country': 'United States',
-                        'impact': 3,  # High
-                        'name': 'FOMC Member Bostic Speaks',
-                        'type': 'speech'
-                    },
-                    {
-                        'timestamp': base_timestamp + 8.5 * 3600,  # 08:30
-                        'country': 'Australia',
-                        'impact': 2,  # Medium
-                        'name': 'RBA Meeting Minutes',
-                        'type': 'report'
-                    },
-                    {
-                        'timestamp': base_timestamp + 13 * 3600,  # 13:00
-                        'country': 'United Kingdom',
-                        'impact': 3,  # High
-                        'name': 'Average Earnings ex Bonus (Feb)',
-                        'type': 'release',
-                        'fore': '6.0%',
-                        'prev': '5.9%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 13 * 3600,  # 13:00
-                        'country': 'United Kingdom',
-                        'impact': 3,  # High
-                        'name': 'Unemployment Rate (Feb)',
-                        'type': 'release',
-                        'fore': '4.4%',
-                        'prev': '4.4%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 13 * 3600,  # 13:00
-                        'country': 'Euro Zone',
-                        'impact': 2,  # Medium
-                        'name': 'German WPI (MoM) (Mar)',
-                        'type': 'release',
-                        'fore': '0.2%',
-                        'prev': '0.6%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 16 * 3600,  # 16:00
-                        'country': 'Euro Zone',
-                        'impact': 3,  # High
-                        'name': 'German ZEW Economic Sentiment (Apr)',
-                        'type': 'release',
-                        'fore': '10.6',
-                        'prev': '51.6'
-                    },
-                    {
-                        'timestamp': base_timestamp + 16 * 3600,  # 16:00
-                        'country': 'Euro Zone',
-                        'impact': 3,  # High
-                        'name': 'Industrial Production (MoM) (Feb)',
-                        'type': 'release',
-                        'fore': '0.1%',
-                        'prev': '0.8%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 19.5 * 3600,  # 19:30
-                        'country': 'United States',
-                        'impact': 3,  # High
-                        'name': 'NY Empire State Manufacturing Index (Apr)',
-                        'type': 'release',
-                        'fore': '-14.80',
-                        'prev': '-20.00'
-                    },
-                    {
-                        'timestamp': base_timestamp + 19.5 * 3600,  # 19:30
-                        'country': 'Canada',
-                        'impact': 3,  # High
-                        'name': 'CPI (YoY) (Mar)',
-                        'type': 'release',
-                        'fore': '2.6%',
-                        'prev': '2.6%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 19.5 * 3600,  # 19:30
-                        'country': 'Canada',
-                        'impact': 2,  # Medium
-                        'name': 'Manufacturing Sales (MoM) (Feb)',
-                        'type': 'release',
-                        'fore': '-0.1%',
-                        'prev': '1.7%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 22.5 * 3600,  # 22:30
-                        'country': 'United States',
-                        'impact': 1,  # Low
-                        'name': '52-Week Bill Auction',
-                        'type': 'release',
-                        'prev': '3.945%'
-                    },
-                    {
-                        'timestamp': base_timestamp + 22.58 * 3600,  # 22:35
-                        'country': 'United States',
-                        'impact': 3,  # High
-                        'name': 'FOMC Member Barkin Speaks',
-                        'type': 'speech'
-                    },
-                    {
-                        'timestamp': base_timestamp + 23 * 3600,  # 23:00
-                        'country': 'Euro Zone',
-                        'impact': 3,  # High
-                        'name': 'ECB President Lagarde Speaks',
-                        'type': 'speech'
-                    }
-                ]
+            # VERWIJDER hardcoded 2025 datum check
+            # Altijd dummy events genereren bij gebrek aan echte data
+            # Voor demonstratiedoeleinden
+            base_timestamp = datetime.datetime.combine(today.date(), datetime.time.min).timestamp()
             
-            # Voor andere datums, genereer dynamische data
-            return []
+            # Genereer realistische testdata voor de huidige datum
+            day_of_week = today.weekday()  # 0-6, 0 is Monday
+            day_of_month = today.day       # 1-31
+            
+            # Set random seed voor semi-deterministische generatie
+            random.seed(day_of_month + day_of_week * 31)
+            
+            # Genereer dummy evenementen voor vandaag
+            return self._generate_dummy_events(base_timestamp, day_of_week)
+            
         except Exception as e:
             logger.error(f"Error fetching news: {str(e)}")
             return []

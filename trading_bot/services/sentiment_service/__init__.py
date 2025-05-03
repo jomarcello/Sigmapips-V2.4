@@ -26,19 +26,16 @@ class MarketSentimentService:
         return await self._generate_mock_data(instrument)
                 
     async def _generate_mock_data(self, instrument):
-        """Generate mock data for sentiment analysis"""
-        logger.info(f"Generating mock data for {instrument}")
+        """Returns an error message instead of generating mock data"""
+        logger.warning(f"Mock data requested for {instrument} but generation is disabled")
         
-        # Generate basic mock data
-        sentiment_score = random.uniform(0.3, 0.7)
-        bullish_percentage = int(sentiment_score * 100)
-        
+        # Error message instead of mock data
         result = {
-            'overall_sentiment': 'neutral',
-            'sentiment_score': round(sentiment_score, 2),
-            'bullish_percentage': bullish_percentage,
-            'analysis': f"<b>🎯 {instrument} Market Analysis</b>\n\nMock data for testing purposes.",
-            'source': 'mock_data'
+            'overall_sentiment': 'unknown',
+            'sentiment_score': 0,
+            'bullish_percentage': 0,
+            'analysis': f"<b>⚠️ Sentiment Analysis Unavailable</b>\n\nNo real sentiment data is available for {instrument}. The system does not use fallback data.",
+            'source': 'error'
         }
         
         # Save to cache

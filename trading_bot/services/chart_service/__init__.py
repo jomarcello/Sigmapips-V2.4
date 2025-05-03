@@ -1,28 +1,18 @@
-# Leeg bestand om de map als een Python-pakket te markeren
-# Vermijd ALLE imports hier om circulaire imports te voorkomen
-
-# Import hack voor backward compatibility
-from trading_bot.services.chart_service.tradingview_selenium import TradingViewSeleniumService
-from trading_bot.services.chart_service.tradingview_playwright import TradingViewPlaywrightService
-
-# Voor backward compatibility
-TradingViewPuppeteerService = TradingViewPlaywrightService
-
-# Leeg bestand of minimale imports
-# Vermijd het importeren van ChartService en TradingViewSeleniumService hier
-
-# Exporteer de ChartService klasse
+"""
+Chart Service module
+"""
+import logging
 from trading_bot.services.chart_service.chart import ChartService as _ChartService
+from trading_bot.services.chart_service.direct_yahoo_provider import DirectYahooProvider
+from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
+from trading_bot.services.chart_service.binance_provider import BinanceProvider
 
-# Maak een alias voor eenvoudige import
+# Re-export under the service namespace
 ChartService = _ChartService
 
-# This file can be empty, it just marks the directory as a Python package
-
-# Eenvoudige versie zonder circulaire imports
-from trading_bot.services.chart_service.chart import ChartService
-
-# Vermijd het importeren van andere services hier om circulaire imports te voorkomen
+# Initialize logging
+logger = logging.getLogger(__name__)
+logger.info("Chart Service module loaded")
 
 
 

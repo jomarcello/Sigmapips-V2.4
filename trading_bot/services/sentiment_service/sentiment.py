@@ -1692,155 +1692,33 @@ The percentages MUST add up to 100%, and the formatted text MUST include all sec
             return 'forex'  # Default to forex
     
     def _get_mock_sentiment_data(self, instrument: str) -> Dict[str, Any]:
-        """Generate mock sentiment data for an instrument"""
-        logger.warning(f"Using mock sentiment data for {instrument} because API keys are not available or valid")
+        """Return error message instead of generating mock sentiment data."""
+        logger.warning(f"Requested sentiment data for {instrument} but no real data is available.")
+        current_time = datetime.now().isoformat()
         
-        # Determine sentiment randomly but biased by instrument type
-        if instrument.startswith(('BTC', 'ETH')):
-            is_bullish = random.random() > 0.3  # 70% chance of bullish for crypto
-        elif instrument.startswith(('XAU', 'GOLD')):
-            is_bullish = random.random() > 0.4  # 60% chance of bullish for gold
-        else:
-            is_bullish = random.random() > 0.5  # 50% chance for other instruments
-        
-        # Generate random percentage values
-        bullish_percentage = random.randint(60, 85) if is_bullish else random.randint(15, 40)
-        bearish_percentage = 100 - bullish_percentage
-        neutral_percentage = 0  # We don't use neutral in this mockup
-        
-        # Calculate sentiment score from -1.0 to 1.0
-        sentiment_score = (bullish_percentage - bearish_percentage) / 100
-        
-        # Generate random news headlines
-        headlines = []
-        if is_bullish:
-            headlines = [
-                f"Positive economic outlook boosts {instrument}",
-                f"Institutional investors increase {instrument} positions",
-                f"Optimistic market sentiment for {instrument}"
-            ]
-        else:
-            headlines = [
-                f"Economic concerns weigh on {instrument}",
-                f"Profit taking leads to {instrument} pressure",
-                f"Cautious market sentiment for {instrument}"
-            ]
-        
-        # Generate mock analysis text
-        analysis_text = f"""<b>🎯 {instrument} Market Sentiment Analysis</b>
-
-<b>Overall Sentiment:</b> {"Bullish 📈" if is_bullish else "Bearish 📉"}
-
-<b>Market Sentiment Breakdown:</b>
-🟢 Bullish: {bullish_percentage}%
-🔴 Bearish: {bearish_percentage}%
-⚪️ Neutral: 0%
-
-<b>📰 Key Sentiment Drivers:</b>
-• {"Positive economic indicators" if is_bullish else "Negative economic outlook"}
-• {"Strong institutional interest" if is_bullish else "Increased selling pressure"}
-• Regular market fluctuations and trading activity
-
-<b>📊 Market Mood:</b>
-The overall market mood for {instrument} is {"optimistic with strong buyer interest" if is_bullish else "cautious with increased seller activity"}.
-
-<b>📅 Important Events & News:</b>
-• {"Recent economic data showing positive trends" if is_bullish else "Economic concerns affecting market sentiment"}
-• {"Institutional buying providing support" if is_bullish else "Technical resistance creating pressure"}
-• General market conditions aligning with broader trends
-
-<b>🔮 Sentiment Outlook:</b>
-Based on current market sentiment, the outlook for {instrument} appears {"positive" if is_bullish else "cautious"}.
-
-<i>Note: This is mock data for demonstration purposes only. Real trading decisions should be based on comprehensive analysis.</i>"""
-        
-        # Determine strength based on how far from neutral (50%)
-        trend_strength = 'Strong' if abs(bullish_percentage - 50) > 15 else 'Moderate' if abs(bullish_percentage - 50) > 5 else 'Weak'
-        
-        # Create dictionary result with all data
         return {
-            'overall_sentiment': 'bullish' if is_bullish else 'bearish',
-            'sentiment_score': sentiment_score,
-            'bullish': bullish_percentage,
-            'bearish': bearish_percentage,
-            'neutral': neutral_percentage,
-            'bullish_percentage': bullish_percentage,
-            'bearish_percentage': bearish_percentage,
-            'technical_score': f"{random.randint(60, 80)}% {'bullish' if is_bullish else 'bearish'}",
-            'news_score': f"{random.randint(55, 75)}% {'positive' if is_bullish else 'negative'}",
-            'social_score': f"{random.randint(50, 70)}% {'bullish' if is_bullish else 'bearish'}",
-            'trend_strength': trend_strength,
-            'volatility': random.choice(['High', 'Moderate', 'Low']),
-            'volume': random.choice(['Above Average', 'Normal', 'Below Average']),
-            'support_level': 'Not available',
-            'resistance_level': 'Not available',
-            'recommendation': f"{'Consider appropriate risk management with the current market conditions.' if is_bullish else 'Consider appropriate risk management with the current market conditions.'}",
-            'analysis': analysis_text,
-            'news_headlines': headlines,
-            'source': 'mock_data'
+            "instrument": instrument,
+            "timestamp": current_time,
+            "error": True,
+            "message": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "sentiment_text": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "overall_sentiment": "unknown",
+            "source": "error"
         }
-    
+
     def _get_fallback_sentiment(self, instrument: str) -> Dict[str, Any]:
-        """Generate fallback sentiment data when APIs fail"""
-        logger.warning(f"Using fallback sentiment data for {instrument} due to API errors")
+        """Return error message instead of using fallback sentiment data."""
+        logger.warning(f"Fallback sentiment requested for {instrument} but no real data is available.")
+        current_time = datetime.now().isoformat()
         
-        # Default neutral headlines
-        headlines = [
-            f"Market awaits clear direction for {instrument}",
-            "Economic data shows mixed signals",
-            "Traders taking cautious approach"
-        ]
-        
-        # Create a neutral sentiment analysis
-        analysis_text = f"""<b>🎯 {instrument} Market Sentiment Analysis</b>
-
-<b>Overall Sentiment:</b> Neutral ➡️
-
-<b>Market Sentiment Breakdown:</b>
-🟢 Bullish: 50%
-🔴 Bearish: 50%
-⚪️ Neutral: 0%
-
-<b>📰 Key Sentiment Drivers:</b>
-• Standard market activity with no major developments
-• Technical and fundamental factors in balance
-• No significant market-moving events
-
-<b>📊 Market Mood:</b>
-The {instrument} is currently showing a neutral trend with balanced buy and sell interest.
-
-<b>📅 Important Events & News:</b>
-• Standard market activity with no major developments
-• Normal trading conditions observed
-• Balanced market sentiment indicators
-
-<b>🔮 Sentiment Outlook:</b>
-The market sentiment for {instrument} is currently neutral with balanced indicators.
-Monitor market developments for potential sentiment shifts.
-
-<i>Note: This is fallback data due to API issues. Please try again later for updated analysis.</i>"""
-        
-        # Return a balanced neutral sentiment
         return {
-            'overall_sentiment': 'neutral',
-            'sentiment_score': 0,
-            'bullish': 50,
-            'bearish': 50,
-            'neutral': 0,
-            'bullish_percentage': 50,
-            'bearish_percentage': 50,
-            'technical_score': 'N/A',
-            'news_score': 'N/A',
-            'social_score': 'N/A',
-            'trend_strength': 'Weak',
-            'volatility': 'Moderate',
-            'volume': 'Normal',
-            'support_level': 'Not available',
-            'resistance_level': 'Not available',
-            'recommendation': 'Monitor market developments for clearer signals.',
-            'analysis': analysis_text,
-            'news_headlines': headlines,
-            'source': 'fallback_data'
+            "instrument": instrument,
+            "timestamp": current_time,
+            "error": True,
+            "message": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "sentiment_text": f"⚠️ Geen sentiment data beschikbaar voor {instrument}. Het systeem gebruikt geen fallback data.",
+            "overall_sentiment": "unknown",
+            "source": "error"
         }
 
     async def _get_alternative_news(self, instrument: str, market: str) -> str:

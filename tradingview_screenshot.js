@@ -299,7 +299,7 @@ const tvLocalStorage = {
                        document.querySelector('.tv-header__user-menu-button') !== null;
             });
             
-            console.log(`Logged in status: ${isLoggedIn}`);
+            console.log(`[DEBUG] Logged in status detected in JS: ${isLoggedIn}`);
             
             // Als fullscreen is ingeschakeld, verberg UI-elementen
             if (fullscreen) {

@@ -17,6 +17,7 @@ SIGNAL_DETAILS = 10
 SIGNAL = 11
 SUBSCRIBE = 12
 BACK_TO_MENU = 13
+SIGNAL_ANALYSIS = 14
 
 # Callback data constants
 CALLBACK_ANALYSIS_TECHNICAL = "analysis_technical"
@@ -47,6 +48,11 @@ CALLBACK_SIGNAL_BACK_TO_SIGNAL_ANALYSIS = "back_to_signal_analysis"
 CALLBACK_SIGNAL_BACK_SIGNALS = "back_signals"
 CALLBACK_SIGNAL_SIGNALS_ADD = "signal_signals_add"
 CALLBACK_SIGNAL_SIGNALS_MANAGE = "signal_signals_manage"
+# Signal flow specific callback data
+CALLBACK_SIGNAL_ANALYSIS_TECHNICAL = "signal_analysis_technical"
+CALLBACK_SIGNAL_ANALYSIS_SENTIMENT = "signal_analysis_sentiment"
+CALLBACK_SIGNAL_ANALYSIS_CALENDAR = "signal_analysis_calendar"
+CALLBACK_BACK_TO_SIGNAL = "back_to_signal"
 
 # Market types
 MARKET_FOREX = "forex"

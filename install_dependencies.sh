@@ -3,15 +3,26 @@
 
 echo "Installing SigmaPips dependencies..."
 
-# Zorg ervoor dat pip up-to-date is
-python -m pip install --upgrade pip
+# Installeer pip als het niet geïnstalleerd is
+if ! command -v pip &> /dev/null; then
+    echo "pip niet gevonden. pip wordt geïnstalleerd..."
+    python -m ensurepip --upgrade
+fi
 
 # Installeer yfinance expliciet eerst
 echo "Installing yfinance explicitly..."
-pip install yfinance==0.2.36
+pip install yfinance==0.2.57
 
-# Installeer alle dependencies uit requirements.txt
-echo "Installing all requirements from requirements.txt..."
+# Installeer cachetools expliciet (nodig voor YahooFinanceProvider)
+echo "Installing cachetools explicitly..."
+pip install cachetools>=5.5.0
+
+# Installeer overige dependencies
+echo "Installing other dependencies..."
 pip install -r requirements.txt
+
+# Controleer yfinance versie
+echo "Checking yfinance version..."
+pip show yfinance
 
 echo "Done installing dependencies!" 

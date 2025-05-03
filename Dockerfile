@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Installeer Git
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
 # Installeer Chrome en benodigde dependencies
 RUN apt-get update && apt-get install -y \
     wget \
@@ -65,18 +68,67 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV DISPLAY=:99
 
+# Stel custom environment variables in
+ENV TRADINGVIEW_SESSION_ID=z90l85p2anlgdwfppsrdnnfantz48z1o
+# Zorg dat echte marktdata wordt gebruikt, geen fallback
+ENV ALWAYS_USE_DEFAULT_ANALYSIS=false
+ENV USE_SIMPLE_TA_FORMAT=false
+ENV PREFER_REAL_MARKET_DATA=true
+
+# Installeer Playwright-specifieke dependencies
+# Bijgewerkte versies voor Debian Bookworm
+RUN apt-get update && apt-get install -y \
+    fonts-noto-color-emoji \
+    libopus0 \
+    libwebp7 \
+    libenchant-2-2 \
+    libgudev-1.0-0 \
+    libsecret-1-0 \
+    libhyphen0 \
+    libvpx7 \
+    libevent-2.1-7 \
+    ffmpeg \
+    libwoff1 \
+    libharfbuzz-icu0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Werkdirectory instellen
 WORKDIR /app
 
-# Kopieer alleen de dependency bestanden
+# Controleer of we een Git repository hebben
+COPY .git* ./
+RUN if [ -d ".git" ]; then \
+      git config --global --add safe.directory /app && \
+      git pull; \
+    else \
+      echo "No .git directory found, skipping git pull"; \
+    fi
+
+# Kopieer alleen requirements.txt
 COPY requirements.txt .
-COPY docker_setup.sh .
 
-# Maak het setup-script uitvoerbaar
-RUN chmod +x docker_setup.sh
+# Installeer benodigde systeem packages voor Python
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Draai het setup-script om alle dependencies te installeren
-RUN ./docker_setup.sh
+# Installeer yfinance expliciet
+RUN pip install yfinance==0.2.57
+
+# Installeer cachetools expliciet (nodig voor YahooFinanceProvider)
+RUN pip install cachetools>=5.5.0
+
+# Installeer alle Python dependencies
+RUN pip install -r requirements.txt
+
+# Installeer Playwright voor Python en Node.js
+RUN pip install playwright && playwright install chromium
+RUN npm install playwright@latest && npx playwright install chromium
 
 # Kopieer de rest van de app
 COPY . .

@@ -29,8 +29,8 @@ class BinanceProvider:
         "https://api4.binance.com"
     ]
     
-    # Data API endpoint for market data only
-    DATA_API_ENDPOINT = "https://data-api.binance.vision"
+    # Officially documented endpoint for public market data (less restricted)
+    SPOT_DATA_API_URL = "https://data-api.binance.vision"
     
     # Current active endpoint (start with the primary one)
     _active_endpoint_index = 0
@@ -60,7 +60,8 @@ class BinanceProvider:
     @staticmethod
     async def get_market_data(instrument: str, timeframe: str = "1h") -> Optional[Dict[str, Any]]:
         """
-        Get market data from Binance API for technical analysis.
+        Get market data from Binance Data API (data.binance.com) for technical analysis.
+        This endpoint is less likely to be geo-restricted for market data.
         
         Args:
             instrument: Trading instrument (e.g., BTCUSD, ETHUSDT)
@@ -69,137 +70,129 @@ class BinanceProvider:
         Returns:
             Optional[Dict]: Technical analysis data or None if failed
         """
-        retries = 0
-        max_retries = 3
+        # Use the dedicated SPOT data endpoint URL defined at class level
+        data_endpoint_url = BinanceProvider.SPOT_DATA_API_URL 
         
-        while retries < max_retries:
-            try:
-                # Implement basic rate limiting
-                current_time = time.time()
-                minute_passed = current_time - BinanceProvider._last_api_call >= 60
+        # Log original instrument before formatting
+        logger.info(f"[Binance Data API] Getting market data for instrument: {instrument}")
+        
+        try:
+            # Implement basic rate limiting (still useful)
+            current_time = time.time()
+            minute_passed = current_time - BinanceProvider._last_api_call >= 60
+            
+            if minute_passed:
+                BinanceProvider._api_call_count = 0
+                BinanceProvider._last_api_call = current_time
+            elif BinanceProvider._api_call_count >= BinanceProvider._max_calls_per_minute:
+                logger.warning(f"Binance API rate limit reached ({BinanceProvider._api_call_count} calls). Waiting...")
+                await asyncio.sleep(5 + random.random() * 2)
+            
+            BinanceProvider._api_call_count += 1
+            
+            # Format symbol for Binance API
+            formatted_symbol = BinanceProvider._format_symbol(instrument)
+            logger.info(f"[Binance Data API] Formatted symbol: {instrument} -> {formatted_symbol}")
+            
+            logger.info(f"Fetching {formatted_symbol} data from Binance Vision Data API: {data_endpoint_url}. API call #{BinanceProvider._api_call_count} this minute.")
+            
+            # Map timeframe to Binance interval
+            binance_interval = {
+                "1m": "1m", 
+                "5m": "5m", 
+                "15m": "15m", 
+                "30m": "30m",
+                "1h": "1h", 
+                "2h": "2h", 
+                "4h": "4h", 
+                "1d": "1d",
+                "1w": "1w",
+                "1M": "1M"
+            }.get(timeframe, "1h")
+            
+            limit = 120 # Always get enough data for indicators
                 
-                if minute_passed:
-                    # Reset counter if a minute has passed
-                    BinanceProvider._api_call_count = 0
-                    BinanceProvider._last_api_call = current_time
-                elif BinanceProvider._api_call_count >= BinanceProvider._max_calls_per_minute:
-                    # If we hit the rate limit, wait until the minute is up
-                    logger.warning(f"Binance API rate limit reached ({BinanceProvider._api_call_count} calls). Waiting before retry.")
-                    await asyncio.sleep(5 + random.random() * 2)  # Add jitter to prevent thundering herd
+            endpoint = "/api/v3/klines"
+            params = {
+                "symbol": formatted_symbol,
+                "interval": binance_interval,
+                "limit": limit
+            }
+            
+            # Get candlestick data using the specific data endpoint
+            async with aiohttp.ClientSession() as session:
+                headers = {} # Data endpoint typically doesn't need API key for public klines
                 
-                # Increment the API call counter
-                BinanceProvider._api_call_count += 1
+                request_url = f"{data_endpoint_url}{endpoint}"
+                logger.info(f"[Binance Data API Request] URL: {request_url}")
+                logger.info(f"[Binance Data API Request] PARAMS: {params}")
+                logger.info(f"[Binance Data API Request] HEADERS: {headers}")
                 
-                # Format symbol for Binance API
-                formatted_symbol = BinanceProvider._format_symbol(instrument)
-                
-                base_url = BinanceProvider.get_base_url()
-                logger.info(f"Fetching {formatted_symbol} data from Binance using {base_url}. API call #{BinanceProvider._api_call_count} this minute.")
-                
-                # Map timeframe to Binance interval
-                binance_interval = {
-                    "1m": "1m", 
-                    "5m": "5m", 
-                    "15m": "15m", 
-                    "30m": "30m",
-                    "1h": "1h", 
-                    "2h": "2h", 
-                    "4h": "4h", 
-                    "1d": "1d",
-                    "1w": "1w",
-                    "1M": "1M"
-                }.get(timeframe, "1h")
-                
-                # Determine the number of candles to fetch based on timeframe
-                limit = 100
-                if binance_interval in ["1h", "2h", "4h"]:
-                    limit = 120  # Get more data for better indicator calculation
-                    
-                # Fetch klines (candlestick data)
-                endpoint = "/api/v3/klines"
-                params = {
-                    "symbol": formatted_symbol,
-                    "interval": binance_interval,
-                    "limit": limit
-                }
-                
-                # Get candlestick data
-                async with aiohttp.ClientSession() as session:
-                    headers = {}
-                    if BinanceProvider.API_KEY:
-                        headers["X-MBX-APIKEY"] = BinanceProvider.API_KEY
-                    
-                    async with session.get(f"{base_url}{endpoint}", params=params, headers=headers) as response:
+                try:
+                    async with session.get(request_url, params=params, headers=headers, timeout=20) as response: # Increased timeout slightly
                         if response.status != 200:
                             error_text = await response.text()
-                            logger.error(f"Binance API error: {response.status}, Response: {error_text}")
-                            
-                            # Try another endpoint if available
-                            if retries < max_retries - 1:
-                                BinanceProvider.switch_endpoint()
-                                retries += 1
-                                continue
+                            logger.error(f"[Binance Data API Response Error] STATUS: {response.status}")
+                            logger.error(f"[Binance Data API Response Error] HEADERS: {response.headers}")
+                            logger.error(f"[Binance Data API Response Error] BODY: {error_text}")
+                            # If data endpoint fails, return None - no fallback needed for this specific strategy
                             return None
                         
                         klines = await response.json()
                         if not klines or not isinstance(klines, list):
-                            logger.error(f"Binance API returned invalid kline data: {klines}")
+                            logger.error(f"[Binance Data API] Returned invalid kline data: {klines}")
                             return None
+                        
+                        logger.info(f"[Binance Data API] Successfully retrieved {len(klines)} klines for {formatted_symbol}")
+                        
+                except aiohttp.ClientConnectorError as e:
+                    logger.error(f"[Binance Data API Connection Error] Failed to connect to {request_url}: {str(e)}")
+                    return None # Fail directly if connection error to data endpoint
+                except asyncio.TimeoutError:
+                    logger.error(f"[Binance Data API Connection Error] Timeout connecting to {request_url}")
+                    return None # Fail directly if timeout to data endpoint
+            
+            # Convert klines to dataframe
+            df = BinanceProvider._klines_to_dataframe(klines)
+            
+            # Calculate technical indicators
+            df = BinanceProvider._calculate_indicators(df)
+            
+            # Get the latest data point
+            latest = df.iloc[-1]
+            
+            # Create analysis result object
+            MarketData = namedtuple('MarketData', ['instrument', 'indicators'])
+            
+            # Extract indicators for return
+            indicators = {
+                "close": float(latest["close"]),
+                "open": float(latest["open"]),
+                "high": float(latest["high"]),
+                "low": float(latest["low"]),
+                "volume": float(latest["volume"]),
+                "EMA20": float(latest["EMA20"]),
+                "EMA50": float(latest["EMA50"]),
+                "EMA200": float(latest["EMA200"]),
+                "RSI": float(latest["RSI"]),
+                "MACD.macd": float(latest["MACD"]),
+                "MACD.signal": float(latest["MACD_signal"]),
+                "MACD.hist": float(latest["MACD_hist"]),
+            }
+            
+            standardized_indicators = BinanceProvider._standardize_indicator_names(indicators)
+            
+            week_data = df.tail(168 if binance_interval == "1h" else 42 if binance_interval == "4h" else 7 if binance_interval == "1d" else df.shape[0])
+            standardized_indicators["weekly_high"] = float(week_data["high"].max())
+            standardized_indicators["weekly_low"] = float(week_data["low"].min())
                 
-                # Convert klines to dataframe
-                df = BinanceProvider._klines_to_dataframe(klines)
-                
-                # Calculate technical indicators
-                df = BinanceProvider._calculate_indicators(df)
-                
-                # Get the latest data point
-                latest = df.iloc[-1]
-                
-                # Create analysis result object
-                MarketData = namedtuple('MarketData', ['instrument', 'indicators'])
-                
-                # Extract indicators for return
-                indicators = {
-                    "close": float(latest["close"]),
-                    "open": float(latest["open"]),
-                    "high": float(latest["high"]),
-                    "low": float(latest["low"]),
-                    "volume": float(latest["volume"]),
-                    "EMA20": float(latest["EMA20"]),
-                    "EMA50": float(latest["EMA50"]),
-                    "EMA200": float(latest["EMA200"]),
-                    "RSI": float(latest["RSI"]),
-                    "MACD.macd": float(latest["MACD"]),
-                    "MACD.signal": float(latest["MACD_signal"]),
-                    "MACD.hist": float(latest["MACD_hist"]),
-                }
-                
-                # Add weekly high/low if available
-                if "weekly_high" in latest and "weekly_low" in latest:
-                    indicators["weekly_high"] = float(latest["weekly_high"])
-                    indicators["weekly_low"] = float(latest["weekly_low"])
-                else:
-                    # Calculate approximate weekly high/low from available data
-                    week_data = df.tail(168 if binance_interval == "1h" else 
-                                      42 if binance_interval == "4h" else 
-                                      7 if binance_interval == "1d" else df.shape[0])
-                    indicators["weekly_high"] = float(week_data["high"].max())
-                    indicators["weekly_low"] = float(week_data["low"].min())
-                    
-                result = MarketData(instrument=instrument, indicators=indicators)
-                return result
-                
-            except Exception as e:
-                logger.error(f"Error getting market data from Binance: {str(e)}")
-                logger.error(traceback.format_exc())
-                
-                # Try another endpoint if available
-                if retries < max_retries - 1:
-                    BinanceProvider.switch_endpoint()
-                    retries += 1
-                    await asyncio.sleep(1)  # Brief delay before retry
-                else:
-                    return None
+            result = MarketData(instrument=instrument, indicators=standardized_indicators)
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting market data from Binance Data API: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None # General exception handling
     
     @staticmethod
     async def get_ticker_price(symbol: str) -> Optional[float]:
@@ -388,12 +381,23 @@ class BinanceProvider:
     @staticmethod
     def _format_symbol(instrument: str) -> str:
         """Format instrument symbol for Binance API"""
+        logger.info(f"[Binance] Formatting symbol: {instrument}")
+        
+        # Ensure uppercase and remove slashes
         instrument = instrument.upper().replace("/", "")
         
-        # Ensure proper format for Binance (BTCUSD -> BTCUSDT)
+        # Make sure crypto symbols end with USDT for Binance
         if instrument.endswith("USD") and not instrument.endswith("USDT"):
             instrument = instrument.replace("USD", "USDT")
+            logger.info(f"[Binance] Converted USD to USDT: {instrument}")
         
+        # Handle common crypto symbols without USD suffix (e.g., BTC -> BTCUSDT)
+        common_crypto_symbols = ["BTC", "ETH", "XRP", "DOT", "ADA", "SOL", "DOGE", "AVAX", "MATIC"]
+        if instrument in common_crypto_symbols:
+            instrument = f"{instrument}USDT"
+            logger.info(f"[Binance] Added USDT suffix to common crypto: {instrument}")
+        
+        logger.info(f"[Binance] Final formatted symbol: {instrument}")
         return instrument
     
     @staticmethod
@@ -497,3 +501,35 @@ class BinanceProvider:
                     retries += 1
                 else:
                     return None 
+
+    @staticmethod
+    def _standardize_indicator_names(indicators: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Standardize indicator names for compatibility with chart service.
+        Adds lowercase versions with underscores for all indicators.
+        
+        Args:
+            indicators: Dictionary with original indicator names
+            
+        Returns:
+            Dict: Dictionary with both original and standardized names
+        """
+        result = indicators.copy()  # Keep original names
+        
+        # Add standardized versions (lowercase with underscores)
+        mapping = {
+            "EMA20": "ema_20",
+            "EMA50": "ema_50", 
+            "EMA200": "ema_200",
+            "RSI": "rsi",
+            "MACD.macd": "macd",
+            "MACD.signal": "macd_signal",
+            "MACD.hist": "macd_hist"
+        }
+        
+        # Add all standardized versions
+        for orig_key, std_key in mapping.items():
+            if orig_key in indicators:
+                result[std_key] = indicators[orig_key]
+        
+        return result 

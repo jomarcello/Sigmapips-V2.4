@@ -168,6 +168,9 @@ const { chromium } = require('playwright');
           value: sessionId,
           domain: '.tradingview.com',
           path: '/',
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax'
         },
         // Extra cookies om te laten zien dat je alle popups hebt gezien
         {

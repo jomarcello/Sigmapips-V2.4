@@ -16,11 +16,21 @@ apt-get update && apt-get install -y \
 
 # Installeer yfinance expliciet
 echo "Installing yfinance package explicitly..."
-pip install yfinance==0.2.36
+pip install yfinance==0.2.57
 
 # Installeer alle dependencies 
 echo "Installing Python dependencies from requirements.txt..."
 pip install -r requirements.txt
+
+# Installeer Playwright voor Python
+echo "Installing Playwright for Python..."
+pip install playwright
+playwright install chromium
+
+# Installeer Playwright voor Node.js
+echo "Installing Playwright for Node.js..."
+npm install playwright@latest
+npx playwright install chromium
 
 echo "Docker setup completed."
 echo "You can now start the application." 

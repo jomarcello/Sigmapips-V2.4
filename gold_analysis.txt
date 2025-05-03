@@ -1,0 +1,22 @@
+Gold (GC=F) Analysis
+
+Zone Strength: ★★★☆☆
+
+📊 Market Overview
+Price is currently trading near current price of 3267.70, showing bullish momentum. The pair remains above key EMAs, indicating a strong uptrend. Volume is moderate, supporting the current price action.
+
+🔑 Key Levels
+Daily High:   3271.60
+Daily Low:    3234.50
+Weekly High:  3340.00
+Weekly Low:   3198.60
+
+📈 Technical Indicators
+RSI: neutral (53.16)
+MACD: bearish (63.87983 is below signal 76.87648)
+Moving Averages: Price above EMA 50 (3109.51) and above EMA 200 (2877.51), confirming bullish bias.
+
+🤖 Sigmapips AI Recommendation
+Watch for a breakout above 3271.60 for further upside. Maintain a buy bias while price holds above 3234.50. Be cautious of overbought conditions if RSI approaches 70.
+
+⚠️ Disclaimer: For educational purposes only.
