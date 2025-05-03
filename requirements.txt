@@ -21,6 +21,7 @@ tradingview-ta>=3.3.0
 yahoo_fin>=0.8.9  # Yahoo Finance data provider
 requests_html>=0.10.0  # Required by yahoo_fin
 yfinance==0.2.57  # Nieuwste versie met betere rate limit handling
+opencv-python-headless>=4.8.0  # Required for image processing (headless version)
 
 # API integrations
 # python-binance>=1.0.17  # Optionele Binance API client (uncomment indien nodig)
