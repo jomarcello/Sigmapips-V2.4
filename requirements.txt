@@ -17,7 +17,7 @@ matplotlib>=3.7.1
 pandas>=2.0.0
 mplfinance>=0.12.9b0
 numpy>=1.24.2
-tradingview-ta>=3.3.0
+tradingview-ta>=3.3.0  # TradingView API voor technische analyse en marktdata zonder fallback
 yahoo_fin>=0.8.9  # Yahoo Finance data provider
 requests_html>=0.10.0  # Required by yahoo_fin
 yfinance==0.2.57  # Nieuwste versie met betere rate limit handling
