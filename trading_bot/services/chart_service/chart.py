@@ -20,6 +20,7 @@ import pickle
 import hashlib
 import traceback
 import re
+import inspect
 
 # Importeer alleen de base class
 from trading_bot.services.chart_service.base import TradingViewService
@@ -438,7 +439,16 @@ class ChartService:
                             formatted_symbol = None
                             if hasattr(provider, '_format_symbol'):
                                 try:
-                                    formatted_symbol = provider._format_symbol(instrument)
+                                    # Check if the provider method requires both is_crypto and is_commodity parameters
+                                    sig = inspect.signature(provider._format_symbol)
+                                    if len(sig.parameters) >= 3:
+                                        # Call with both parameters (modern version)
+                                        is_crypto = market_type == "crypto"
+                                        is_commodity = market_type == "commodity"
+                                        formatted_symbol = provider._format_symbol(instrument, is_crypto=is_crypto, is_commodity=is_commodity)
+                                    else:
+                                        # Call without parameters (legacy version)
+                                        formatted_symbol = provider._format_symbol(instrument)
                                     logger.info(f"Yahoo Finance formatted symbol: {formatted_symbol}")
                                     
                                     # If this is a commodity, override the symbol format

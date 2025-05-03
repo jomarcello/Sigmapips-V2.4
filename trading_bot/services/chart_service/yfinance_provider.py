@@ -46,6 +46,9 @@ class YahooFinanceProvider:
     _429_count = 0
     _429_last_time = 0
     _max_429_count = 3  # Maximum number of 429 errors before extended backoff
+    
+    # Create additional cache for frequently used symbols
+    _frequent_symbols_cache = TTLCache(maxsize=20, ttl=1800)  # 30 minutes cache for common symbols
 
     @staticmethod
     def _get_session():
@@ -138,8 +141,8 @@ class YahooFinanceProvider:
 
     @staticmethod
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=30), # Adjusted retry wait
+        stop=stop_after_attempt(5),  # Increased from 3 to 5 attempts
+        wait=wait_exponential(multiplier=2, min=4, max=60),  # More aggressive backoff
         reraise=True
     )
     async def _download_data(symbol: str, start_date: datetime = None, end_date: datetime = None, interval: str = None, timeout: int = 30, original_symbol: str = None, period: str = None) -> pd.DataFrame:
@@ -209,114 +212,122 @@ class YahooFinanceProvider:
         
         logger.info(f"[Yahoo] Attempting direct download method with yf.download for {symbol} (Interval: {interval}, Period: {period}, Start: {start_date.date() if start_date else 'N/A'}, End: {end_date.date() if end_date else 'N/A'})")
         
-        # Ensure session exists
-        session = YahooFinanceProvider._get_session()
-        
-        # Function to perform the download (runs in executor)
-        def download():
-            try:
-                # Add explicit logging
-                logger.info(f"[Yahoo] Executing download for {symbol}, format: {'period' if period else 'start/end'}")
-                
-                # Check if set_tz_session_for_downloading exists (handle different yfinance versions)
-                if hasattr(yf.multi, 'set_tz_session_for_downloading'):
-                     yf.multi.set_tz_session_for_downloading(session)
-                else:
-                     logger.warning("[Yahoo] Function set_tz_session_for_downloading not available in this yfinance version")
-
-                # Construct download arguments
-                download_kwargs = {
-                    'tickers': symbol,
-                    'progress': False,
-                    'session': session,
-                    'timeout': timeout,
-                    'ignore_tz': False,
-                    'threads': False,  # Disable multi-threading to avoid issues
-                    'proxy': None,  # Let the session handle proxy settings
-                    'actions': False,  # No need for dividends/splits
-                    'auto_adjust': True,  # Auto-adjust data
-                    'prepost': False,  # No pre/post market data for forex
-                    'rounding': True,  # Round values to appropriate precision
-                }
-                
-                # Voeg het interval toe als het niet None is
-                if interval:
-                    download_kwargs['interval'] = interval
-                
-                # Use period OR start/end, not both - prefer period
-                if period:
-                     download_kwargs['period'] = period
-                     logger.info(f"[Yahoo] Using period={period} for download")
-                elif start_date is not None and end_date is not None:
-                     download_kwargs['start'] = start_date
-                     download_kwargs['end'] = end_date
-                     logger.info(f"[Yahoo] Using start={start_date.date()} and end={end_date.date()} for download")
-                else:
-                     # Fallback naar een veilige periode als er geen parameters zijn
-                     download_kwargs['period'] = '7d'  # Standaard 7 dagen
-                     logger.info(f"[Yahoo] Using fallback period=7d for download")
-
-                # Download data - explicit logging
-                logger.info(f"[Yahoo] Executing yf.download with params: interval={interval}, {'period='+period if period else f'start={start_date.date()}, end={end_date.date()}'}")
-                df = yf.download(**download_kwargs)
-                
-                # Log result summary
-                if df is not None and not df.empty:
-                    logger.info(f"[Yahoo] Download successful, got {len(df)} rows for {symbol}")
-                    logger.info(f"[Yahoo] Data range: {df.index[0]} to {df.index[-1]}")
-                    logger.info(f"[Yahoo] Columns: {df.columns.tolist()}")
-                else:
-                    logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
-                    
-                return df
-                
-            except Exception as e:
-                 logger.error(f"[Yahoo] Error during yf.download for {symbol}: {str(e)}")
-                 # Check for 429 error specifically
-                 if "429" in str(e) or "too many requests" in str(e).lower():
-                     # Update 429 tracking
-                     YahooFinanceProvider._429_count += 1
-                     YahooFinanceProvider._429_last_time = time.time()
-                     logger.warning(f"[Yahoo] 429 Too Many Requests detected (count: {YahooFinanceProvider._429_count})")
-                     # Add extra wait for 429
-                     time.sleep(random.uniform(1.0, 3.0))  # Add immediate delay
-                 # Add more specific error checks if needed (e.g., connection errors)
-                 if "No data found" in str(e) or "symbol may be delisted" in str(e):
-                     logger.warning(f"[Yahoo] No data found for {symbol} in range {start_date} to {end_date}")
-                     return pd.DataFrame() # Return empty DataFrame on no data
-                 raise # Reraise other exceptions for tenacity
-
-        # Run the download in a separate thread to avoid blocking asyncio event loop
+        # Attempt download
         try:
-             # Use default executor (ThreadPoolExecutor) but get the loop more carefully
-             try:
-                 loop = asyncio.get_running_loop()
-             except RuntimeError:
-                 # If there's no running loop
-                 loop = asyncio.new_event_loop()
-                 asyncio.set_event_loop(loop)
+            # Check if this is a frequently used symbol - if so, prioritize from cache
+            cache_key_freq = f"{symbol}_{interval}_{period if period else 'custom'}"
+            if cache_key_freq in YahooFinanceProvider._frequent_symbols_cache:
+                logger.info(f"[Yahoo] Using frequently accessed symbol cache for {symbol}")
+                return YahooFinanceProvider._frequent_symbols_cache[cache_key_freq].copy()
+            
+            # Ensure we have a session with proper headers and rate limiting
+            session = YahooFinanceProvider._get_session()
+                
+            # Wait for rate limiting
+            await YahooFinanceProvider._wait_for_rate_limit()
+                
+            # Define the download function
+            def download():
+                try:
+                    # Use session and consistent user agent
+                    if period:
+                        logger.info(f"[Yahoo] Attempting direct download method with yf.download for {symbol} (Interval: {interval}, Period: {period}, Start: N/A, End: N/A)")
+                        logger.info(f"[Yahoo] Executing download for {symbol}, format: period")
+                        df = yf.download(
+                            symbol,
+                            period=period,
+                            interval=interval,
+                            progress=False,
+                            prepost=False,
+                            threads=False,  # Avoid multithreading to prevent rate limit issues
+                            session=session,
+                            timeout=timeout
+                        )
+                    else:
+                        logger.info(f"[Yahoo] Attempting direct download method with yf.download for {symbol} (Interval: {interval}, Start: {start_date}, End: {end_date})")
+                        logger.info(f"[Yahoo] Executing download for {symbol}, format: dates")
+                        df = yf.download(
+                            symbol,
+                            start=start_date,
+                            end=end_date,
+                            interval=interval,
+                            progress=False,
+                            prepost=False,
+                            threads=False,  # Avoid multithreading to prevent rate limit issues
+                            session=session,
+                            timeout=timeout
+                        )
+                        
+                    # Update the frequently used symbols cache for common forex/indices/commodities
+                    # This improves performance for commonly accessed symbols
+                    if (symbol.endswith('=X') or symbol.startswith('^') or 
+                        symbol in ['GC=F', 'SI=F', 'CL=F', 'BZ=F'] or 
+                        symbol in ['BTC-USD', 'ETH-USD']):
+                        if not df.empty:
+                            YahooFinanceProvider._frequent_symbols_cache[cache_key_freq] = df.copy()
+                            logger.info(f"[Yahoo] Updated frequent symbols cache for {symbol}")
+                    
+                    return df
+                except Exception as download_error:
+                    error_message = str(download_error)
+                    
+                    # Check for rate limit errors
+                    if '429' in error_message or 'too many requests' in error_message.lower():
+                        # Increment the 429 counter and record the time
+                        YahooFinanceProvider._429_count += 1
+                        YahooFinanceProvider._429_last_time = time.time()
+                        
+                        # Apply exponential backoff based on how many 429s we've seen
+                        backoff_seconds = min(60 * (2 ** (YahooFinanceProvider._429_count - 1)), 3600)  # Max 1 hour
+                        logger.warning(f"[Yahoo] Rate limit (429) detected. Backing off for {backoff_seconds} seconds. (Count: {YahooFinanceProvider._429_count})")
+                        
+                        # Sleep to respect rate limit before retry
+                        time.sleep(backoff_seconds)
+                        
+                        # Reset session to get fresh connection
+                        YahooFinanceProvider._session = None
+                        session = YahooFinanceProvider._get_session()
+                    
+                    # Re-raise for retry mechanism to handle
+                    raise download_error
+
+            # Run the download in a separate thread to avoid blocking asyncio event loop
+            try:
+                 # Use default executor (ThreadPoolExecutor) but get the loop more carefully
+                 try:
+                     loop = asyncio.get_running_loop()
+                 except RuntimeError:
+                     # If there's no running loop
+                     loop = asyncio.new_event_loop()
+                     asyncio.set_event_loop(loop)
              
-             # Run download in executor
-             df = await loop.run_in_executor(None, download)
+                 # Run download in executor
+                 df = await loop.run_in_executor(None, download)
+            except Exception as e:
+                 logger.error(f"[Yahoo] Download failed for {symbol} after retries: {e}")
+                 df = None # Ensure df is None on failure
+
+            if df is not None and not df.empty:
+                 logger.info(f"[Yahoo] Direct download successful for {symbol}, got {len(df)} rows")
+                 # --- Cache Update ---
+                 data_download_cache[cache_key] = df.copy() # Store a copy in cache
+                 # --- End Cache Update ---
+            elif df is not None and df.empty:
+                 logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
+                 # Cache the empty result too, to avoid repeated failed attempts for a short period
+                 data_download_cache[cache_key] = df.copy()
+            else:
+                 logger.warning(f"[Yahoo] Download returned None for {symbol}")
+                 # Optionally cache None or handle differently if needed
+
+            return df
         except Exception as e:
-             logger.error(f"[Yahoo] Download failed for {symbol} after retries: {e}")
-             df = None # Ensure df is None on failure
+            logger.error(f"[Yahoo] Error processing market data for {symbol}: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Ensure None is cached on error before returning
+            data_download_cache[cache_key] = None
+            return None
 
-        if df is not None and not df.empty:
-             logger.info(f"[Yahoo] Direct download successful for {symbol}, got {len(df)} rows")
-             # --- Cache Update ---
-             data_download_cache[cache_key] = df.copy() # Store a copy in cache
-             # --- End Cache Update ---
-        elif df is not None and df.empty:
-             logger.warning(f"[Yahoo] Download returned empty DataFrame for {symbol}")
-             # Cache the empty result too, to avoid repeated failed attempts for a short period
-             data_download_cache[cache_key] = df.copy()
-        else:
-             logger.warning(f"[Yahoo] Download returned None for {symbol}")
-             # Optionally cache None or handle differently if needed
-
-        return df
-    
     @staticmethod
     def _validate_and_clean_data(df: pd.DataFrame, instrument: str = None) -> pd.DataFrame:
         """
