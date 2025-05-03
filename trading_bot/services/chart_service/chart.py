@@ -398,6 +398,7 @@ class ChartService:
                 market_type = await self._detect_market_type(instrument)
                 yahoo_provider = None
                 binance_provider = None
+                tradingview_provider = None
                 
                 # Find our providers
                 for provider in self.chart_providers:
@@ -405,27 +406,35 @@ class ChartService:
                         yahoo_provider = provider
                     elif 'binance' in provider.__class__.__name__.lower():
                         binance_provider = provider
+                    elif 'tradingview' in provider.__class__.__name__.lower():
+                        tradingview_provider = provider
                 
-                # Choose providers based on market type
+                # Choose providers based on market type - Prioritize TradingView for all market types
                 prioritized_providers = []
+                
+                # Add TradingView first for all market types (REAL DATA, NO FALLBACK)
+                if tradingview_provider:
+                    prioritized_providers.append(tradingview_provider)
+                    logger.info(f"Using TradingView as primary provider for {instrument} ({market_type})")
+                
+                # Then add other providers as fallback
                 if market_type == "crypto":
-                    # For crypto, try Binance first, then Yahoo
+                    # For crypto, try Binance next, then Yahoo
                     if binance_provider:
                         prioritized_providers.append(binance_provider)
                     if yahoo_provider:
                         prioritized_providers.append(yahoo_provider)
                 elif market_type == "commodity":
-                    # For commodities, get price from our specialized method if Yahoo fails
+                    # For commodities, add Yahoo as fallback
                     if yahoo_provider:
                         prioritized_providers.append(yahoo_provider)
-                    # We'll handle the fallback specially for commodities
+                    # We'll handle commodity-specific methods if both TradingView and Yahoo fail
                 else:
-                    # For non-crypto (forex, indices), only use Yahoo
+                    # For forex and indices, add Yahoo as fallback
                     if yahoo_provider:
                         prioritized_providers.append(yahoo_provider)
-                    # Don't add Binance for non-crypto markets
                 
-                # Add any other providers that aren't Binance (for non-crypto markets)
+                # Add any remaining providers that weren't already added
                 for provider in self.chart_providers:
                     if provider not in prioritized_providers and (market_type == "crypto" or not isinstance(provider, BinanceProvider)):
                         prioritized_providers.append(provider)
