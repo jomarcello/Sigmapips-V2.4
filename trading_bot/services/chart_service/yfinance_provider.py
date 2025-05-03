@@ -228,6 +228,9 @@ class YahooFinanceProvider:
                 
             # Define the download function
             def download():
+                # Use nonlocal to access the session variable from the outer scope
+                nonlocal session
+                
                 try:
                     # Use session and consistent user agent
                     if period:
