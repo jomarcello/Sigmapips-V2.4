@@ -37,6 +37,7 @@ from trading_bot.services.chart_service.base import TradingViewService
 from trading_bot.services.chart_service.yfinance_provider import YahooFinanceProvider
 from trading_bot.services.chart_service.binance_provider import BinanceProvider
 from trading_bot.services.chart_service.direct_yahoo_provider import DirectYahooProvider
+from trading_bot.services.chart_service.tradingview_provider import TradingViewProvider
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class ChartService:
                 BinanceProvider(),      # Eerst Binance voor crypto's
                 DirectYahooProvider(),  # Direct Yahoo Finance implementation via yfinance library
                 YahooFinanceProvider(), # Yahoo Finance als fallback via yfinance
+                TradingViewProvider(),  # TradingView als alternatieve data bron
             ]
             
             # Initialiseer de chart links met de specifieke TradingView links
@@ -143,7 +145,7 @@ class ChartService:
             self.analysis_cache = {}
             self.analysis_cache_ttl = 60 * 15  # 15 minutes in seconds
             
-            logging.info("Chart service initialized with providers: Binance, DirectYahoo, YahooFinance")
+            logging.info("Chart service initialized with providers: Binance, DirectYahoo, YahooFinance, TradingView")
         except Exception as e:
             logging.error(f"Error initializing chart service: {str(e)}")
             raise
