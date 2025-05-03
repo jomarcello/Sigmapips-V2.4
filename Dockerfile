@@ -1,140 +1,69 @@
-# Start met Python als basis
-FROM python:3.9-slim
+# Core packages
+python-telegram-bot>=20.0
+aiohttp>=3.8.4
+python-dotenv>=1.0.0
+httpx==0.24.1
+stripe>=5.4.0
+tenacity>=8.2.3  # For robust retry mechanisms
+fastapi>=0.95.0
+uvicorn[standard]>=0.21.1
 
-# Installeer Node.js
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    && curl -sL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Database
+supabase==1.1.1
+redis==5.0.1
 
-# Installeer Git
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Chart generation
+matplotlib>=3.7.1
+pandas>=2.0.0
+mplfinance>=0.12.9b0
+numpy>=1.24.2
+tradingview-ta>=3.3.0
+yahoo_fin>=0.8.9  # Yahoo Finance data provider
+requests_html>=0.10.0  # Required by yahoo_fin
+yfinance==0.2.57  # Nieuwste versie met betere rate limit handling
+opencv-python-headless>=4.8.0  # Required for image processing (headless version)
 
-# Installeer Chrome en benodigde dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    unzip \
-    xvfb \
-    libxi6 \
-    libgconf-2-4 \
-    default-jdk \
-    libglib2.0-0 \
-    libnss3 \
-    libgdk-pixbuf2.0-0 \
-    libgtk-3-0 \
-    libx11-xcb1 \
-    libxss1 \
-    libasound2 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libdbus-1-3 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libfontconfig1 \
-    fonts-liberation \
-    libappindicator3-1 \
-    xdg-utils \
-    python3-tk \
-    # Tesseract en afhankelijkheden voor OCR
-    tesseract-ocr \
-    libtesseract-dev \
-    tesseract-ocr-eng \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# API integrations
+# python-binance>=1.0.17  # Optionele Binance API client (uncomment indien nodig)
 
-# Gebruik Chromium in plaats van Chrome (werkt op ARM en x86)
-RUN apt-get update && apt-get install -y \
-    chromium \
-    chromium-driver \
-    && rm -rf /var/lib/apt/lists/*
+# For logging and debugging
+python-json-logger==2.0.7
 
-# Installeer de nieuwste beschikbare ChromeDriver versie (voor Chrome 123)
-# Chrome 134 is te nieuw, dus we gebruiken de laatste beschikbare versie
-RUN echo "Using chromedriver from Chromium package" \
-    && ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
+# Browser automation
+selenium==4.10.0
+pillow==9.5.0
+webdriver-manager==3.8.6
+playwright==1.40.0  # Used for TradingView screenshots
 
-# Set up Chrome environment variables
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-ENV DISPLAY=:99
+# OCR processing
+# Using OCR.space API instead of local Tesseract
+# pytesseract>=0.3.13
 
-# Stel custom environment variables in
-ENV TRADINGVIEW_SESSION_ID=z90l85p2anlgdwfppsrdnnfantz48z1o
-# Zorg dat echte marktdata wordt gebruikt, geen fallback
-ENV ALWAYS_USE_DEFAULT_ANALYSIS=false
-ENV USE_SIMPLE_TA_FORMAT=false
-ENV PREFER_REAL_MARKET_DATA=true
+# Data fetching
+lxml==4.9.3
+beautifulsoup4>=4.11.1
+arrow==1.3.0  # Voor Investing Calendar
 
-# Installeer Playwright-specifieke dependencies
-# Bijgewerkte versies voor Debian Bookworm
-RUN apt-get update && apt-get install -y \
-    fonts-noto-color-emoji \
-    libopus0 \
-    libwebp7 \
-    libenchant-2-2 \
-    libgudev-1.0-0 \
-    libsecret-1-0 \
-    libhyphen0 \
-    libvpx7 \
-    libevent-2.1-7 \
-    ffmpeg \
-    libwoff1 \
-    libharfbuzz-icu0 \
-    && rm -rf /var/lib/apt/lists/*
+# Vector database
+pinecone-client
+requests>=2.31.0
+urllib3>=2.0.7
 
-# Werkdirectory instellen
-WORKDIR /app
+# AI Services
+# Required dependencies for natural language processing and sentiment analysis
+tavily-python==0.2.2  # for web search via Tavily API - REQUIRED for sentiment analysis
 
-# Controleer of we een Git repository hebben
-COPY .git* ./
-RUN if [ -d ".git" ]; then \
-      git config --global --add safe.directory /app && \
-      git pull; \
-    else \
-      echo "No .git directory found, skipping git pull"; \
-    fi
+# Added from the code block
+twelvedata>=1.2.10
 
-# Kopieer alleen requirements.txt
-COPY requirements.txt .
-
-# Installeer benodigde systeem packages voor Python
-RUN apt-get update && apt-get install -y \
-    python3-pip \
-    python3-dev \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Installeer yfinance expliciet
-RUN pip install yfinance==0.2.57
-
-# Installeer cachetools expliciet (nodig voor YahooFinanceProvider)
-RUN pip install cachetools>=5.5.0
-
-# Installeer alle Python dependencies
-RUN pip install -r requirements.txt
-
-# Installeer Playwright voor Python en Node.js
-RUN pip install playwright && playwright install chromium
-RUN npm install playwright@latest && npx playwright install chromium
-
-# Kopieer de rest van de app
-COPY . .
-
-# Poort voor FastAPI
-EXPOSE 8000
-
-# Start de applicatie
-CMD ["python", "-m", "trading_bot.main"]
+# yfinance en dependencies
+pandas>=1.3.0
+numpy>=1.16.5
+requests>=2.31
+multitasking>=0.0.7
+platformdirs>=2.0.0
+pytz>=2022.5
+frozendict>=2.3.4
+requests_cache>=1.0
+requests_ratelimiter>=0.3.1
+scipy>=1.6.3
