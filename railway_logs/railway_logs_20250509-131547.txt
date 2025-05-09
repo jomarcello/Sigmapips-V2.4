@@ -1,0 +1,16 @@
+# Plak hier de Railway logs van je gefaalde deployment
+
+1. Ga naar railway.app en log in
+2. Ga naar je project en klik op de gefaalde deployment
+3. Bekijk de logs en kopieer de relevante foutmeldingen
+4. Plak de foutmeldingen hieronder
+5. Sla dit bestand op (Cmd+S)
+6. Sluit dit bestand
+
+--------------------
+PLAK LOGS HIERONDER:
+--------------------
+
+
+
+

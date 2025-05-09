@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+buildCommand = ""
+
+[build.buildkit]
+enable = true
+
+[context]
+memory = "4GB"
+cpu = 2 

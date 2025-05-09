@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/test-deployment/main.py", line 1, in <module>
+    from api.services.ChartService import ChartService
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/test-deployment/api/services/ChartService.py", line 1, in <module>
+    from api.services.MarketService import MarketService
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/test-deployment/api/services/MarketService.py", line 1, in <module>
+    from api.services.ChartService import ChartService
+ImportError: cannot import name 'ChartService' from partially initialized module 'api.services.ChartService' (most likely due to a circular import) (/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/test-deployment/api/services/ChartService.py)

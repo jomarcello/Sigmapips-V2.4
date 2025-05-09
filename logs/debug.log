@@ -1,0 +1,148 @@
+2025-05-09 16:13:09 - INFO - INPUT [process_trading_signal]: {"signal_id": "buy_btc_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"symbol": "BTC/USD", "name": "Bitcoin/US Dollar"}}}
+2025-05-09 16:13:09 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:13:09 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:13:10 - INFO - OUTPUT [signal_processing]: {"success": true, "signal_id": "buy_btc_signal", "processed_at": "2025-05-09T16:13:10.469937", "action": "BUY"}
+2025-05-09 16:13:10 - INFO - PROCESS [signal_processing] Status: completed | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:13:14 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:13:14 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:13:14 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:13:15 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:13:15 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:13:15 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 16:16:18 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:16:18 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:16:18 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:16:19 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:16:19 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:16:19 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 16:25:42 - INFO - INPUT [process_trading_signal]: {"signal_id": "buy_btc_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"symbol": "BTC/USD", "name": "Bitcoin/US Dollar"}}}
+2025-05-09 16:25:42 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:25:42 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:25:43 - INFO - OUTPUT [signal_processing]: {"success": true, "signal_id": "buy_btc_signal", "processed_at": "2025-05-09T16:25:43.066410", "action": "BUY"}
+2025-05-09 16:25:43 - INFO - PROCESS [signal_processing] Status: completed | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:25:48 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:25:48 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:25:48 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:25:49 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:25:49 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:25:49 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 16:30:00 - INFO - INPUT [process_trading_signal]: {"signal_id": "buy_btc_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"symbol": "BTC/USD", "name": "Bitcoin/US Dollar"}}}
+2025-05-09 16:30:00 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:30:00 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:30:01 - INFO - OUTPUT [signal_processing]: {"success": true, "signal_id": "buy_btc_signal", "processed_at": "2025-05-09T16:30:01.443937", "action": "BUY"}
+2025-05-09 16:30:01 - INFO - PROCESS [signal_processing] Status: completed | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:30:01 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:30:01 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:30:01 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:30:02 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:30:02 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:30:02 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 16:30:02 - INFO - INPUT [simulate_user_login]: {"username": "test_error", "password": "********"}
+2025-05-09 16:30:02 - INFO - PROCESS [user_login] Status: started | Data: {"username": "test_error"}
+2025-05-09 16:30:02 - DEBUG - VARIABLE [auth_start_time]: 2025-05-09T16:30:02.602064
+2025-05-09 16:30:03 - ERROR - ERROR: 'nonexistent_key' | Context: {"username": "test_error", "function": "simulate_user_login"}
+2025-05-09 16:30:03 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 142, in simulate_user_login
+    result = {"user": {"id": None, "name": username}["nonexistent_key"]}
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'nonexistent_key'
+
+2025-05-09 16:30:03 - INFO - PROCESS [user_login] Status: failed | Data: {"username": "test_error"}
+2025-05-09 16:38:05 - INFO - PROCESS [debug_issue] Status: started | Data: {"issue": "Authentication and signal processing errors", "duration": 1}
+2025-05-09 16:38:05 - ERROR - ERROR: Failed to fetch Railway logs
+2025-05-09 16:38:05 - ERROR - Traceback: NoneType: None
+
+2025-05-09 16:38:09 - INFO - PROCESS [debug_issue] Status: started | Data: {"issue": "Authentication and signal processing errors", "duration": 1}
+2025-05-09 16:38:11 - ERROR - ERROR: Failed to fetch Railway logs
+2025-05-09 16:38:11 - ERROR - Traceback: NoneType: None
+
+2025-05-09 16:38:37 - INFO - INPUT [process_trading_signal]: {"signal_id": "buy_btc_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"symbol": "BTC/USD", "name": "Bitcoin/US Dollar"}}}
+2025-05-09 16:38:37 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:38:37 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:38:38 - INFO - OUTPUT [signal_processing]: {"success": true, "signal_id": "buy_btc_signal", "processed_at": "2025-05-09T16:38:38.261975", "action": "BUY"}
+2025-05-09 16:38:38 - INFO - PROCESS [signal_processing] Status: completed | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 16:38:38 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:38:38 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:38:38 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:38:39 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:38:39 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:38:39 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 16:38:39 - INFO - INPUT [simulate_user_login]: {"username": "test_error", "password": "********"}
+2025-05-09 16:38:39 - INFO - PROCESS [user_login] Status: started | Data: {"username": "test_error"}
+2025-05-09 16:38:39 - DEBUG - VARIABLE [auth_start_time]: 2025-05-09T16:38:39.419962
+2025-05-09 16:38:40 - ERROR - ERROR: 'nonexistent_key' | Context: {"username": "test_error", "function": "simulate_user_login"}
+2025-05-09 16:38:40 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 142, in simulate_user_login
+    result = {"user": {"id": None, "name": username}["nonexistent_key"]}
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'nonexistent_key'
+
+2025-05-09 16:38:40 - INFO - PROCESS [user_login] Status: failed | Data: {"username": "test_error"}
+2025-05-09 16:38:43 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 16:38:43 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 16:38:43 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 16:38:44 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 16:38:44 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 16:38:44 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}
+2025-05-09 17:03:56 - INFO - INPUT [simulate_user_login]: {"username": "test_user", "password": "********"}
+2025-05-09 17:03:56 - INFO - PROCESS [user_login] Status: started | Data: {"username": "test_user"}
+2025-05-09 17:03:56 - DEBUG - VARIABLE [auth_start_time]: 2025-05-09T17:03:56.614891
+2025-05-09 17:03:57 - INFO - OUTPUT [user_authentication]: {"success": true, "user_id": 12345, "username": "test_user"}
+2025-05-09 17:03:57 - INFO - PROCESS [user_login] Status: completed | Data: {"username": "test_user"}
+2025-05-09 17:04:01 - INFO - INPUT [simulate_user_login]: {"username": "test_error", "password": "********"}
+2025-05-09 17:04:01 - INFO - PROCESS [user_login] Status: started | Data: {"username": "test_error"}
+2025-05-09 17:04:01 - DEBUG - VARIABLE [auth_start_time]: 2025-05-09T17:04:01.077910
+2025-05-09 17:04:02 - ERROR - ERROR: 'nonexistent_key' | Context: {"username": "test_error", "function": "simulate_user_login"}
+2025-05-09 17:04:02 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 142, in simulate_user_login
+    result = {"user": {"id": None, "name": username}["nonexistent_key"]}
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'nonexistent_key'
+
+2025-05-09 17:04:02 - INFO - PROCESS [user_login] Status: failed | Data: {"username": "test_error"}
+2025-05-09 17:04:05 - INFO - INPUT [process_trading_signal]: {"signal_id": "buy_btc_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"symbol": "BTC/USD", "name": "Bitcoin/US Dollar"}}}
+2025-05-09 17:04:05 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 17:04:05 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 17:04:06 - INFO - OUTPUT [signal_processing]: {"success": true, "signal_id": "buy_btc_signal", "processed_at": "2025-05-09T17:04:06.131119", "action": "BUY"}
+2025-05-09 17:04:06 - INFO - PROCESS [signal_processing] Status: completed | Data: {"signal_id": "buy_btc_signal"}
+2025-05-09 17:04:09 - INFO - INPUT [process_trading_signal]: {"signal_id": "error_signal", "signal_data": {"type": "market", "direction": "long", "price": 50000.0, "trading_pair": {"name": "BTC/USD"}}}
+2025-05-09 17:04:09 - INFO - PROCESS [signal_processing] Status: started | Data: {"signal_id": "error_signal"}
+2025-05-09 17:04:09 - DEBUG - VARIABLE [signal_type]: market
+2025-05-09 17:04:10 - ERROR - ERROR: 'symbol' | Context: {"signal_id": "error_signal", "function": "process_trading_signal"}
+2025-05-09 17:04:10 - ERROR - Traceback: Traceback (most recent call last):
+  File "/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/example_debug_standalone.py", line 182, in process_trading_signal
+    pair = signal_data["trading_pair"]["symbol"]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'symbol'
+
+2025-05-09 17:04:10 - INFO - PROCESS [signal_processing] Status: failed | Data: {"signal_id": "error_signal"}

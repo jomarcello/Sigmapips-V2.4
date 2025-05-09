@@ -1,0 +1,9 @@
+2025-05-09 16:53:56 - WARNING - Railway CLI not installed or not working properly.
+2025-05-09 16:53:56 - WARNING - Error: error: unrecognized subcommand 'version'
+
+Usage: railway [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+
+2025-05-09 16:53:56 - INFO - Found 10 potential errors in log file
+2025-05-09 16:53:56 - INFO - Analysis saved to /Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/railway_logs/ai_analysis_20250509_165356.json

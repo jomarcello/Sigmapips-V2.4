@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.railway.cursor-bridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/cursor_bridge_venv/bin/python</string>
+        <string>/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/railway-auto-fix/cursor_bridge_enhanced.py</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RAILWAY_TOKEN</key>
+        <string>2673de3e-1fef-430a-8a54-b2f0c743d0ac</string>
+        <key>RAILWAY_PROJECT_ID</key>
+        <string>b01532a9-fd21-495b-9b8c-139fcf23b34e</string>
+        <key>POLL_INTERVAL_SECONDS</key>
+        <string>60</string>
+        <key>LOCAL_REPO_PATH</key>
+        <string>/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main</string>
+        <key>CURSOR_PATH</key>
+        <string>/Applications/Cursor.app/Contents/MacOS/Cursor</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/cursor_bridge_error.log</string>
+    <key>StandardOutPath</key>
+    <string>/Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main/cursor_bridge_output.log</string>
+</dict>
+</plist>

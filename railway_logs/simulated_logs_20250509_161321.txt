@@ -1,0 +1,12 @@
+2023-05-09T10:15:23Z - INFO - Application started
+2023-05-09T10:15:24Z - INFO - Connected to database
+2023-05-09T10:15:30Z - INFO - User login: user123
+2023-05-09T10:15:35Z - ERROR - KeyError: 'auth_token' in authenticate_user at /app/trading_bot/auth.py:45
+2023-05-09T10:15:35Z - ERROR - Traceback: File "/app/trading_bot/auth.py", line 45, in authenticate_user
+    token = user_data['auth_token']
+KeyError: 'auth_token'
+2023-05-09T10:15:40Z - INFO - Signal received: BTC_LONG
+2023-05-09T10:15:45Z - ERROR - TypeError: 'NoneType' object is not subscriptable in process_signal at /app/trading_bot/signals.py:78
+2023-05-09T10:15:45Z - ERROR - Traceback: File "/app/trading_bot/signals.py", line 78, in process_signal
+    price = signal_data['price']['value']
+TypeError: 'NoneType' object is not subscriptable

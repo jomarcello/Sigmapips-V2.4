@@ -1,0 +1,18 @@
+2025-05-09 09:48:42,998 - __main__ - INFO - Running in test mode with log file: test-deployment/error_log.txt
+2025-05-09 09:48:42,999 - __main__ - INFO - Found 1 errors in logs
+2025-05-09 09:48:42,999 - __main__ - INFO - Processing failed deployment test-deployment for service test-service
+2025-05-09 09:48:43,536 - __main__ - ERROR - Failed to fetch deployment logs: {"errors":[{"message":"Problem processing request","traceId":"7200634016681702262"}]}
+
+2025-05-09 09:48:43,537 - __main__ - ERROR - Could not fetch logs, aborting
+2025-05-09 09:49:09,546 - __main__ - INFO - Running in test mode with log file: test-deployment/error_log.txt
+2025-05-09 09:49:09,547 - __main__ - INFO - Found 1 errors in logs
+2025-05-09 09:49:09,666 - __main__ - INFO - Created prompt file at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-e557so1k/railway_deployment_error.md
+2025-05-09 09:49:09,666 - __main__ - INFO - Starting Cursor with command: /Applications/Cursor.app/Contents/MacOS/Cursor /Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-e557so1k/railway_deployment_error.md
+2025-05-09 09:49:09,668 - __main__ - INFO - Cursor successfully launched
+2025-05-09 09:49:09,668 - __main__ - INFO - Successfully launched Cursor to fix test deployment
+2025-05-09 09:50:13,011 - __main__ - INFO - Running in test mode with log file: test-deployment/error_log.txt
+2025-05-09 09:50:13,011 - __main__ - INFO - Found 1 errors in logs
+2025-05-09 09:50:13,160 - __main__ - INFO - Created prompt file at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-36ay7rrn/railway_deployment_error.md
+2025-05-09 09:50:13,160 - __main__ - INFO - Starting Cursor with command: /Applications/Cursor.app/Contents/MacOS/Cursor /Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-36ay7rrn/railway_deployment_error.md
+2025-05-09 09:50:13,162 - __main__ - INFO - Cursor successfully launched
+2025-05-09 09:50:13,162 - __main__ - INFO - Successfully launched Cursor to fix test deployment

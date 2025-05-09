@@ -1,0 +1,43 @@
+Starting Container
+export BINANCE_API_KEY='***API_KEY_REMOVED***'
+export DEEPSEEK_API_KEY='***API_KEY_REMOVED***'
+export FORCE_POLLING='true'
+export FORCE_WEBHOOK='true'
+export GOOGLE_APPLICATION_CREDENTIALS='/app/google_vision_credentials.json'
+export GOOGLE_CREDENTIALS_JSON='"{'
+export GPG_KEY='***API_KEY_REMOVED***'
+export HOME='/root'
+export HOSTNAME='339370ea3e55'
+export LANG='C.UTF-8'
+export OCR_SPACE_API_KEY='***API_KEY_REMOVED***'
+export OPENAI_API_KEY='***API_KEY_REMOVED***'
+export PATH='/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PERPLEXITY_API_KEY='***API_KEY_REMOVED***'
+export PORT='8080'
+
+2023-05-12T15:45:30Z - INFO - Starting Sigmapips trading bot v5.4
+2023-05-12T15:45:31Z - INFO - Initializing services
+2023-05-12T15:45:32Z - INFO - Connected to database successfully
+2023-05-12T15:45:33Z - INFO - User login: admin
+2023-05-12T15:45:33Z - ERROR - KeyError: 'auth_token' in authenticate_user at /app/trading_bot/bot/auth.py:45
+2023-05-12T15:45:33Z - ERROR - Traceback: File "/app/trading_bot/bot/auth.py", line 45, in authenticate_user
+    token = user_data['auth_token']
+KeyError: 'auth_token'
+2023-05-12T15:45:35Z - INFO - Signal received: BTC_LONG
+2023-05-12T15:45:36Z - ERROR - TypeError: 'NoneType' object is not subscriptable in process_signal at /app/trading_bot/bot/signals.py:78
+2023-05-12T15:45:36Z - ERROR - Traceback: File "/app/trading_bot/bot/signals.py", line 78, in process_signal
+    price = signal_data['price']['value']
+TypeError: 'NoneType' object is not subscriptable
+2023-05-12T15:45:40Z - INFO - Trying to reconnect to trading API
+2023-05-12T15:45:41Z - ERROR - ConnectionError: Failed to connect to trading API: Max retries exceeded
+2023-05-12T15:45:43Z - INFO - Attempting to fallback to secondary API endpoint
+2023-05-12T15:45:45Z - INFO - Connected to secondary API endpoint successfully
+2023-05-12T15:45:50Z - ERROR - ValueError: Invalid trading pair format in signal at /app/trading_bot/bot/signals.py:120
+2023-05-12T15:45:50Z - ERROR - Traceback: File "/app/trading_bot/bot/signals.py", line 120, in validate_signal
+    base, quote = trading_pair.split('/')
+ValueError: not enough values to unpack (expected 2, got 1)
+2023-05-12T15:46:00Z - INFO - System health check initiated
+2023-05-12T15:46:01Z - WARNING - Memory usage above 85%
+2023-05-12T15:46:02Z - WARNING - CPU usage spike detected
+2023-05-12T15:46:10Z - INFO - Restarting signal processor
+2023-05-12T15:46:15Z - INFO - Signal processor restarted successfully 

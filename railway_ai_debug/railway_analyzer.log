@@ -1,0 +1,24 @@
+2025-05-09 16:38:05 - WARNING - Railway CLI not installed or not working properly.
+2025-05-09 16:38:05 - WARNING - Error: error: unrecognized subcommand 'version'
+
+Usage: railway [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+
+2025-05-09 16:38:05 - ERROR - No service name provided.
+2025-05-09 16:38:09 - WARNING - Railway CLI not installed or not working properly.
+2025-05-09 16:38:09 - WARNING - Error: error: unrecognized subcommand 'version'
+
+Usage: railway [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+
+2025-05-09 16:38:09 - INFO - Fetching Railway logs with command: railway logs --service Sigmapips-V2.4 --since 1h
+2025-05-09 16:38:11 - ERROR - Error fetching logs: error: unexpected argument '--since' found
+
+  tip: to pass '--since' as a value, use '-- --since'
+
+Usage: railway logs <--service <SERVICE>|--environment <ENVIRONMENT>|--deployment|--build|DEPLOYMENT_ID>
+
+For more information, try '--help'.
+

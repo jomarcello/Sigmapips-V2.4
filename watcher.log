@@ -1,0 +1,34 @@
+Railway Deployment Watcher Gestart
+Dit script monitort Railway deployments en start Cursor wanneer er een fout optreedt
+Druk Ctrl+C om te stoppen
+
+Controle van deployments...
+2025-05-09 13:11:03,271 - __main__ - INFO - Running in test mode with log file: railway-auto-fix/test_error.log
+2025-05-09 13:11:03,272 - __main__ - INFO - Found 4 errors in logs
+2025-05-09 13:11:03,397 - __main__ - INFO - Created prompt file at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-aqgbh7_m/railway_deployment_error.md
+2025-05-09 13:11:03,398 - __main__ - INFO - Created AI prompt at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-aqgbh7_m/cursor_ai_prompt.md
+2025-05-09 13:11:03,398 - __main__ - INFO - Starting Cursor with command: /Applications/Cursor.app/Contents/MacOS/Cursor /Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-aqgbh7_m/cursor_ai_prompt.md /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-aqgbh7_m/railway_deployment_error.md
+2025-05-09 13:11:03,399 - __main__ - INFO - Cursor successfully launched
+2025-05-09 13:11:03,399 - __main__ - INFO - Successfully launched Cursor to fix test deployment
+
+================================================================================
+CURSOR IS GESTART om test deployment te fixen
+Bekijk Cursor voor verdere instructies
+================================================================================
+
+Wachten voor volgende controle (30 seconden)...
+Controle van deployments...
+2025-05-09 13:11:33,753 - __main__ - INFO - Running in test mode with log file: railway-auto-fix/test_error.log
+2025-05-09 13:11:33,754 - __main__ - INFO - Found 4 errors in logs
+2025-05-09 13:11:33,882 - __main__ - INFO - Created prompt file at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-b1l42ob8/railway_deployment_error.md
+2025-05-09 13:11:33,882 - __main__ - INFO - Created AI prompt at /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-b1l42ob8/cursor_ai_prompt.md
+2025-05-09 13:11:33,882 - __main__ - INFO - Starting Cursor with command: /Applications/Cursor.app/Contents/MacOS/Cursor /Users/jovannitilborg/Downloads/Sigmapips-V2-5.4-main /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-b1l42ob8/cursor_ai_prompt.md /var/folders/1z/phrbftzx7dq94wqlkcgxpy700000gn/T/railway-cursor-b1l42ob8/railway_deployment_error.md
+2025-05-09 13:11:33,884 - __main__ - INFO - Cursor successfully launched
+2025-05-09 13:11:33,884 - __main__ - INFO - Successfully launched Cursor to fix test deployment
+
+================================================================================
+CURSOR IS GESTART om test deployment te fixen
+Bekijk Cursor voor verdere instructies
+================================================================================
+
+Wachten voor volgende controle (30 seconden)...

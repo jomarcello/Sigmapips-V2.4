@@ -1,0 +1,13 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+numAttempts = 2
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 1
+
+[healthcheck]
+interval = "10s"
+timeout = "5s"
+retries = 2
+grace = "5s" 
