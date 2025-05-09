@@ -629,8 +629,11 @@ class TelegramService:
             self.db = db
             self.stripe_service = stripe_service
             
-            # Set up chart service 
-            self.chart_service = ChartService()
+            # Initialize chart service with lazy import to avoid circular dependency
+            logger.info("Initializing chart service...")
+            # Use getter function to avoid circular import
+            from trading_bot.services.chart_service import get_chart_service
+            self.chart_service = get_chart_service()
             
             # Initialize the menu flow
             # Commenting out menu_flow initialization to be implemented later
@@ -720,9 +723,9 @@ class TelegramService:
         
         # Initialize chart service with lazy import to avoid circular dependency
         logger.info("Initializing chart service...")
-        # Import here to avoid circular import
-        from trading_bot.services.chart_service.chart import ChartService
-        self.chart_service = ChartService()
+        # Use getter function to avoid circular import
+        from trading_bot.services.chart_service import get_chart_service
+        self.chart_service = get_chart_service()
         
         # Load stored signals if they exist
         await self.load_stored_signals()

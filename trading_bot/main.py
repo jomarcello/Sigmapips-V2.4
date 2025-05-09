@@ -40,8 +40,8 @@ import httpx
 import telegram.error  # Add this import for BadRequest error handling
 
 from trading_bot.services.database.db import Database
-# Import ChartService directly from chart.py rather than through __init__.py
-from trading_bot.services.chart_service.chart import ChartService
+# Use the getter function instead of direct import to avoid circular imports
+from trading_bot.services.chart_service import get_chart_service
 from trading_bot.services.sentiment_service.sentiment import MarketSentimentService
 from trading_bot.services.calendar_service import EconomicCalendarService
 from trading_bot.services.payment_service.stripe_service import StripeService
@@ -672,7 +672,7 @@ class TelegramService:
         logger.info(f"Bot initialized with webhook URL: {self.webhook_url} and path: {self.webhook_path}")
         
         # Initialize API services
-        self.chart_service = ChartService()  # Initialize chart service
+        self.chart_service = get_chart_service()  # Initialize chart service
         # Lazy load services only when needed
         self._calendar_service = None
         self._sentiment_service = None
