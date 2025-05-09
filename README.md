@@ -5,6 +5,7 @@ This repository contains the fix for the Telegram `/menu` command that was faili
 ## Files in this Repository
 
 1. **fixed_menu_command.py** - Contains the improved menu command implementation
-2. **menu_fix_integration.py** - Integration script that applies the fix
-3. **MENU_COMMAND_DEBUG_INFO.md** - Documentation explaining the issue and solution
-
+2. **app.py** - Simple application entry point for Nixpacks
+3. **nixpacks.toml** - Nixpacks configuration for deployment
+4. **requirements.txt** - Python dependencies
+5. **Procfile** - Deployment process configuration
